@@ -217,6 +217,10 @@ async function main() {
     refreshScanStatus();
   });
 
+  api("/api/health").then((h) => {
+    $("#build-time").textContent = h.build_time || "unknown";
+  });
+
   await loadFilterOptions();
   await loadDeals();
   await refreshScanStatus();

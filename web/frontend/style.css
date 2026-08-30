@@ -169,3 +169,11 @@ table.history-table th, table.history-table td { text-align: left; padding: 4px 
   margin-top: 10px;
   background: #1a1a1a;
 }
+
+.build-footer {
+  text-align: center;
+  padding: 10px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  opacity: 0.6;
+}

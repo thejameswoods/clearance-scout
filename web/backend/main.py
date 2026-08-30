@@ -14,10 +14,13 @@ app.include_router(scan.router)
 app.include_router(settings.router)
 app.include_router(vnc.router)
 
+_build_time_path = Path(__file__).resolve().parent.parent / "BUILD_TIME"
+BUILD_TIME = _build_time_path.read_text().strip() if _build_time_path.exists() else "dev (not built in a container)"
+
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "build_time": BUILD_TIME}
 
 
 # Static frontend (plain HTML/CSS/JS, no build step) is copied into the

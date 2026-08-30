@@ -53,7 +53,16 @@ async def proxy_websocket(websocket: WebSocket, path: str):
     here — any WebSocket upgrade gets proxied to the VNC server it's
     fronting — so this just needs to stay consistent with the path noVNC's
     client JS is told to connect to (see web/frontend's Browser tab)."""
-    await websocket.accept()
+    # noVNC's client always requests the "binary" subprotocol
+    # (rfb.js: `this._sock.open(this._url, ['binary'])`). Per RFC 6455
+    # 4.2.2, if a client offers subprotocols and the server's handshake
+    # response doesn't confirm one, the BROWSER's own WebSocket
+    # implementation is required to fail the connection -- not app JS, the
+    # browser itself. `curl` doesn't enforce this, so a raw handshake test
+    # looked fine while every real browser correctly refused to connect
+    # (code 1006). Echo back whatever the client offered.
+    offered = websocket.scope.get("subprotocols") or []
+    await websocket.accept(subprotocol=offered[0] if offered else None)
     upstream_url = f"ws://{SCANNER_NOVNC_HOST}/{path}"
 
     try:
