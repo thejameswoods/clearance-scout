@@ -62,7 +62,13 @@ async def proxy_websocket(websocket: WebSocket, path: str):
         await websocket.close(code=1011, reason="Can't reach the scanner's noVNC endpoint")
         return
 
-    async with upstream:
+    # Not `async with upstream:` -- the object `websockets.connect()` hands
+    # back once already awaited (websockets.legacy.client.WebSocketClientProtocol
+    # in 13.1) doesn't implement the async context manager protocol itself;
+    # only `websockets.connect(...)` used directly in an `async with` does.
+    # Confirmed live: that raised TypeError on every connection, which is
+    # why the Browser tab wasn't connecting at all.
+    try:
         async def browser_to_upstream():
             try:
                 while True:
@@ -79,3 +85,5 @@ async def proxy_websocket(websocket: WebSocket, path: str):
                 pass
 
         await asyncio.gather(browser_to_upstream(), upstream_to_browser())
+    finally:
+        await upstream.close()
