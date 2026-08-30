@@ -6,7 +6,6 @@ from typing import Any, Iterator
 from ..base import (
     AuthResult,
     Department,
-    NeedsLogin,
     PriceObservation,
     ProductRef,
     RateLimitPolicy,
@@ -18,30 +17,28 @@ from .clearance import detect_clearance as _detect_clearance
 from .departments import discover_departments as _discover_departments
 from .penny import detect_penny as _detect_penny
 
-HOME_URL = "https://www.homedepot.com"
-
 
 class HomeDepotAdapter(RetailerAdapter):
     retailer_slug = "home_depot"
 
     def authenticate(self, browser_ctx: Any) -> AuthResult:
-        # A logged-out session gets redirected to a login/signin page.
-        # Adjust the check below once you've observed the real redirect
-        # target/marker in a logged-out browser_ctx (see adapters/README.md
-        # — this is a human-verifiable one-time check, not a guess to spend
-        # effort perfecting blind).
-        page = browser_ctx.new_page()
-        try:
-            page.goto(f"{HOME_URL}/myaccount/", wait_until="domcontentloaded")
-            logged_in = "signin" not in page.url and "login" not in page.url
-        finally:
-            page.close()
-
-        if not logged_in:
-            raise NeedsLogin(
-                "Home Depot session is not authenticated — log in manually "
-                "over noVNC (see docs/deploy-generic.md)."
-            )
+        # Home Depot doesn't require a logged-in session to browse
+        # products/prices/clearance status by store -- login only matters
+        # for account-specific things (order history, Pro pricing, saved
+        # lists) that this scanner doesn't touch. So: never gate scanning
+        # on login here. This also means never navigating to /myaccount/
+        # during a normal scan -- that's the account/auth surface, which
+        # is reasonably the most heavily monitored part of the site for
+        # fraud/bot signals, and there's no reason to poke it when nothing
+        # downstream needs it.
+        #
+        # Login is tabled for now (2026-08-30): the real login flow itself
+        # 403's against Home Depot's actual auth API even with Patchright's
+        # CDP-level fingerprint patches, which is a harder problem than
+        # this project needs to solve to find clearance deals. If a future
+        # need reintroduces a login requirement (e.g. a retailer where
+        # pricing genuinely requires an account), reintroduce a real check
+        # here rather than assuming this pattern generalizes.
         return AuthResult(valid=True)
 
     def find_stores(

@@ -26,7 +26,12 @@ Plus:
 
 - **`authenticate`** — is the persistent browser session still logged in?
   Raise `NeedsLogin` if not. Never try to log back in silently — that's a
-  human-with-noVNC task, on purpose (CAPTCHAs, 2FA, ToS risk).
+  human-with-noVNC task, on purpose (CAPTCHAs, 2FA, ToS risk). Only
+  implement a real check if the retailer actually requires login to browse
+  prices — Home Depot doesn't, so `HomeDepotAdapter.authenticate()` just
+  returns valid unconditionally (see
+  [`docs/architecture.md`](../docs/architecture.md#login-is-per-adapter-not-assumed)).
+  Don't assume that generalizes to a retailer where it doesn't hold.
 - **`find_stores`** — resolve every store within a radius of a ZIP code,
   not just the nearest one, so a watch can span multiple nearby locations.
 - **`select_store`** — make one of those stores active on the browser

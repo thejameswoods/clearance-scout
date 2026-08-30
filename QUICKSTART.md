@@ -4,7 +4,13 @@ For installation, see [`docs/deploy-generic.md`](docs/deploy-generic.md) or
 [`docs/deploy-proxmox-lxc.md`](docs/deploy-proxmox-lxc.md). This is what to
 do once the containers are up.
 
-## 1. Log into the retailer (one-time)
+## 1. Log into the retailer (only if the adapter needs it)
+
+Not every retailer requires a login to browse prices — Home Depot doesn't,
+for example, so its adapter never gates scanning on this. Check the
+adapter's `authenticate()` before assuming you need to do this step.
+
+If a retailer's adapter does require it:
 
 1. Open the dashboard: `http://<host>:8000`.
 2. Click the **Browser** tab. You'll see a live Chromium session running
@@ -13,6 +19,9 @@ do once the containers are up.
 4. That's it. The session persists in the `browser-profile` Docker volume
    from then on — you shouldn't need this tab again unless the retailer
    logs you out.
+
+You may still want the Browser tab open anyway for step 5 below (capturing
+real API traffic), logged in or not.
 
 ## 2. The dashboard
 
@@ -51,9 +60,11 @@ these have to come from real captured traffic, not guesswork. Until you do
 this, the scanner runs safely (it retries on schedule, doesn't crash-loop,
 never hammers the site) but won't find real deals. To finish it:
 
-1. Complete the login step above.
-2. Open DevTools → Network in that same Browser tab, browse a department
-   and a product page.
+1. Log in first if the adapter actually requires it (step 1 above) —
+   skip if it doesn't.
+2. In the Browser tab, open DevTools → Network, browse a department and a
+   product page (set your ZIP/store the way a normal visitor would if the
+   site asks).
 3. Note the actual request URLs and JSON response shapes.
 4. Fill those into the adapter's `api_client.py` (`*_ENDPOINTS`), and
    adjust the parsing in its `clearance.py` / `penny.py` /

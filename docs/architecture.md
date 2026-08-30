@@ -138,6 +138,26 @@ README's "Access control" section). That's an accepted gap for a
 trusted-LAN-only deployment, not an oversight — real auth is the natural
 next addition once this needs to be reachable from anywhere less trusted.
 
+### Login is per-adapter, not assumed
+
+The contract above (`NeedsLogin`, the Browser-tab login flow) exists for
+retailers that actually need it — it's not a universal requirement.
+Confirmed live for Home Depot specifically (2026-08-30): browsing
+products/prices/clearance status by store doesn't require a logged-in
+account, only account-specific things (order history, Pro pricing, saved
+lists) do, none of which this scanner touches. `HomeDepotAdapter.
+authenticate()` returns valid unconditionally and never navigates to
+`/myaccount/` during a scan — deliberately, since that's the account/auth
+surface and there's no reason to poke it when nothing downstream needs it.
+
+This was also a practical call, not just a correctness one: Home Depot's
+real login API 403's even with Patchright's CDP-level fingerprint
+patches applied (see above) — solving that further was tabled as a
+harder problem than this project needs to solve for its actual goal. A
+future adapter for a retailer that genuinely requires login for pricing
+should implement a real `authenticate()` check rather than assuming this
+pattern (login not required) generalizes.
+
 ### Manual pacing/backoff engine, adapter-declared
 
 Scraping is paced deliberately, and a 403 triggers an escalating backoff
