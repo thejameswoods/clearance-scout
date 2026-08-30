@@ -7,7 +7,11 @@ FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 # Chromium so the one-time interactive Home Depot login (CAPTCHA/2FA) can be
 # driven by a human over noVNC, then the same persistent profile is reused
 # headed-but-unattended for every scheduled scan afterward.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# DEBIAN_FRONTEND=noninteractive avoids a debconf prompt (e.g. from a
+# tzdata/keyboard-configuration dependency of these packages) hanging the
+# build forever on CI, where there's no TTY to answer it.
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         xvfb x11vnc novnc websockify \
     && rm -rf /var/lib/apt/lists/*
 
