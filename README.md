@@ -32,7 +32,9 @@ Four containers, one Docker Compose stack:
 
 See [`docs/deploy-generic.md`](docs/deploy-generic.md) to run it anywhere
 Docker runs, or [`docs/deploy-proxmox-lxc.md`](docs/deploy-proxmox-lxc.md)
-for Proxmox specifically.
+for Proxmox specifically. For the reasoning behind these design choices
+(no VPN, self-hosted-per-instance, the adapter pattern, etc.), see
+[`docs/architecture.md`](docs/architecture.md).
 
 ## Quickstart
 
