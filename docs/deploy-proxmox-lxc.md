@@ -32,11 +32,14 @@ Notes:
   packages both work), then follow [`deploy-generic.md`](deploy-generic.md)
   from step 2 onward, cloning the repo to e.g. `/opt/clearance-scout`.
 
-## Reaching noVNC for the one-time login
+## The one-time login
 
-Don't publish 6901 through any reverse proxy or firewall rule — it drives a
-live, authenticated browser session. SSH into the LXC (or the Proxmox host,
-then `pct enter`) and tunnel from there:
+Reach the dashboard on your LAN (`http://<lxc-ip>:8000` or your internal
+DNS name) and use its **Browser** tab — no separate noVNC step needed on
+Proxmox specifically, that's the whole point of the embedded proxy. The
+direct noVNC port (6901) is still there as a fallback for debugging; don't
+publish it through any reverse proxy or firewall rule either way — it
+drives a live, authenticated browser session with no auth of its own:
 
 ```
 ssh -L 6901:localhost:6901 root@<lxc-ip>
@@ -47,7 +50,9 @@ ssh -L 6901:localhost:6901 root@<lxc-ip>
 If you run something like Nginx Proxy Manager and internal DNS (AdGuard,
 Pi-hole, etc.) already, add a proxy host pointing at
 `<lxc-ip-or-hostname>:8000` and put an access list or basic auth in front of
-it — the dashboard shows your personal shopping activity.
+it — the app itself has no login yet (see the README), and the dashboard
+now embeds live control of an authenticated retailer session (the Browser
+tab), not just your shopping activity.
 
 ## Backups
 

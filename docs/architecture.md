@@ -93,6 +93,19 @@ lasts. If the session goes stale, the adapter raises `NeedsLogin` rather
 than silently retrying or attempting to defeat a challenge — that's a
 human problem, on purpose.
 
+That login step is embedded directly in the dashboard (the **Browser**
+tab), rather than requiring a separate noVNC client and an SSH tunnel.
+`web/backend/routes/vnc.py` proxies both the static noVNC assets and the
+actual VNC-over-WebSocket stream from `scanner:6901` through the
+dashboard's own origin — same idea as the existing scan-status proxy
+(`routes/scan.py`), just extended to a WebSocket. This is a genuine
+tradeoff, not a free win: it means the dashboard now hands out live,
+unauthenticated control of an authenticated retailer session to anyone who
+can reach it, and the dashboard has no login of its own yet (see the
+README's "Access control" section). That's an accepted gap for a
+trusted-LAN-only deployment, not an oversight — real auth is the natural
+next addition once this needs to be reachable from anywhere less trusted.
+
 ### Manual pacing/backoff engine, adapter-declared
 
 Scraping is paced deliberately, and a 403 triggers an escalating backoff

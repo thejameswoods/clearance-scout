@@ -5,13 +5,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from web.backend.routes import deals, scan, settings
+from web.backend.routes import deals, scan, settings, vnc
 
 app = FastAPI(title="Clearance Scout")
 
 app.include_router(deals.router)
 app.include_router(scan.router)
 app.include_router(settings.router)
+app.include_router(vnc.router)
 
 
 @app.get("/api/health")

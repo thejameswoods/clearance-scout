@@ -35,9 +35,11 @@ services:
     volumes:
       - browser-profile:/data/browser-profile
     ports:
-      # noVNC — for the one-time interactive login only. Bind to localhost
-      # and reach it over an SSH tunnel; never publish this port on a
-      # public interface, it can drive a live authenticated browser.
+      # noVNC direct — optional fallback for debugging without going
+      # through the dashboard's embedded Browser tab (see `web`, below).
+      # Bind to localhost and reach it over an SSH tunnel; never publish
+      # this on a public interface, it can drive a live authenticated
+      # browser with no auth of its own.
       - "127.0.0.1:${NOVNC_PORT:-6901}:6901"
 
   web:
@@ -51,7 +53,12 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-clearance_scout}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-clearance_scout}
       SCANNER_INTERNAL_URL: http://scanner:8090
+      SCANNER_NOVNC_HOST: scanner:6901
     ports:
+      # No auth in front of this yet (see README) — fine for an
+      # internal-only deployment. Its /vnc/* routes proxy through to a live
+      # authenticated browser session with no login of their own, so don't
+      # publish this beyond your LAN until that's addressed.
       - "${WEB_PORT:-8000}:8000"
 
   bot:

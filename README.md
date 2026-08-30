@@ -26,7 +26,9 @@ Four containers, one Docker Compose stack:
 - **`db`** — Postgres. Every price check is stored, so you get real
   cross-store and cross-time history, not just "what's on sale right now."
 - **`web`** — a dashboard: filterable deal feed, price history per item,
-  mark-bought/dismiss, scan status.
+  mark-bought/dismiss, scan status, and a **Browser** tab that embeds the
+  scanner's live session directly — that's also where the one-time retailer
+  login happens, no separate noVNC client or SSH tunnel needed.
 - **`bot`** *(optional)* — a standalone Telegram bot for alerts and remote
   scan control.
 
@@ -42,26 +44,33 @@ for Proxmox specifically. For the reasoning behind these design choices
 git clone <this repo>
 cd clearance-scout
 cp .env.example .env   # fill in POSTGRES_PASSWORD, ZIP_CODE, etc.
-docker compose up -d db scanner
+docker compose up -d db scanner web
 ```
 
-Tunnel to the scanner's noVNC port and log into the retailer's site by hand
+Open the dashboard (`http://<host>:8000`) and click the **Browser** tab —
+that's the scanner's live Chromium session, embedded directly, no separate
+noVNC client or SSH tunnel. Log into the retailer's site there by hand
 (one-time — this is deliberately a human step, not automated, since it may
-involve a CAPTCHA or 2FA):
+involve a CAPTCHA or 2FA). `NOVNC_PORT` in `.env` still exists as a direct
+fallback if you'd rather reach it over `ssh -L 6901:localhost:6901`.
+
+Then, optionally, bring up the bot:
 
 ```
-ssh -L 6901:localhost:6901 you@host
-# open http://localhost:6901 and log in
-```
-
-Then bring up the dashboard (and, optionally, the bot):
-
-```
-docker compose up -d web
 docker compose --profile telegram up -d bot   # only if TELEGRAM_BOT_TOKEN is set
 ```
 
 Full walkthrough: [`docs/deploy-generic.md`](docs/deploy-generic.md).
+
+## Access control (currently: none)
+
+There's no login on the dashboard yet — it's built for a trusted, internal
+network (your home LAN), not the open internet. That matters more than it
+sounds: the **Browser** tab hands out live control of an authenticated
+retailer session to whoever can reach the dashboard's URL, not just a view
+of your deal history. Don't publish `WEB_PORT` beyond your LAN (no port
+forwarding, no reverse-proxying it publicly) until real auth is added —
+track/contribute to that here if it matters for your deployment.
 
 ## Narrowing what gets scanned
 

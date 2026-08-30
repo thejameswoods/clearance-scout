@@ -18,6 +18,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="deals">Deals</button>
     <button class="tab-btn" data-tab="history">History</button>
+    <button class="tab-btn" data-tab="browser">Browser</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
   </nav>
 
@@ -40,6 +41,15 @@
 
     <section id="tab-history" class="tab-panel">
       <div id="history-grid" class="deal-grid"></div>
+    </section>
+
+    <section id="tab-browser" class="tab-panel">
+      <p class="meta">
+        Live scanner browser. Log into the retailer's site here (once) —
+        the session persists after that, so you shouldn't need this tab
+        again unless it gets logged out.
+      </p>
+      <iframe id="browser-frame" class="browser-frame" title="Scanner browser"></iframe>
     </section>
 
     <section id="tab-settings" class="tab-panel">

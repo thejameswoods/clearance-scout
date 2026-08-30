@@ -152,11 +152,38 @@ async function refreshScanStatus() {
   badge.className = `badge ${state}`;
 }
 
+// noVNC's own client page, proxied same-origin through /vnc/* (see
+// web/backend/routes/vnc.py) so there's no separate host/port/login
+// prompt — it connects straight back to the dashboard's own websocket
+// proxy. `path` here must stay in sync with that proxy's route prefix.
+const NOVNC_SRC = "/vnc/vnc.html?autoconnect=true&resize=remote&reconnect=true&path=vnc/websockify";
+
+function openBrowserFrame() {
+  const frame = $("#browser-frame");
+  if (frame.src === "" || frame.src === "about:blank" || !frame.src) {
+    frame.src = NOVNC_SRC;
+  }
+}
+
+function closeBrowserFrame() {
+  // Drops the VNC connection when you're not looking at it, rather than
+  // leaving a live remote-control session open in the background.
+  const frame = $("#browser-frame");
+  if (frame.src && !frame.src.endsWith("about:blank")) {
+    frame.src = "about:blank";
+  }
+}
+
 function refreshActiveTab() {
   const active = $(".tab-btn.active").dataset.tab;
   if (active === "deals") loadDeals();
   if (active === "history") loadHistory();
   if (active === "settings") loadSettings();
+  if (active === "browser") {
+    openBrowserFrame();
+  } else {
+    closeBrowserFrame();
+  }
 }
 
 function setupTabs() {
