@@ -60,7 +60,9 @@ Then, optionally, bring up the bot:
 docker compose --profile telegram up -d bot   # only if TELEGRAM_BOT_TOKEN is set
 ```
 
-Full walkthrough: [`docs/deploy-generic.md`](docs/deploy-generic.md).
+Full install walkthrough: [`docs/deploy-generic.md`](docs/deploy-generic.md).
+Once it's up: [`QUICKSTART.md`](QUICKSTART.md) — the dashboard tour, config
+reference, and finishing a retailer's real API endpoints.
 
 ## Access control (currently: none)
 
