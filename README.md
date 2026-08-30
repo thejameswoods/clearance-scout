@@ -63,6 +63,25 @@ docker compose --profile telegram up -d bot   # only if TELEGRAM_BOT_TOKEN is se
 
 Full walkthrough: [`docs/deploy-generic.md`](docs/deploy-generic.md).
 
+## Narrowing what gets scanned
+
+Most people care about a handful of departments, not the whole store. Two
+`.env` settings narrow the scan itself (not just the dashboard filters) —
+fewer departments listed, fewer products price-checked, which also means
+less traffic against the retailer's site:
+
+```
+RADIUS_MILES=25
+WATCHED_DEPARTMENTS=Electrical
+WATCH_KEYWORDS=wire
+```
+
+That combination — any clearance electrical wire at any store within 25
+miles — is the flagship example this was built for. Both settings are
+comma-separated, case-insensitive substring matches; leave either blank to
+scan everything in that dimension. `RADIUS_MILES` controls how many nearby
+stores get scanned, not just the single nearest one.
+
 ## Why not a VPN?
 
 It might seem safer to route the scanner's traffic through a VPN. For this
@@ -104,7 +123,15 @@ isn't "risk-free."
 
 ```
 pip install -r requirements-dev.txt -r scanner/requirements.txt -r web/requirements.txt -r bot/requirements.txt
+ruff check .
 pytest   # signal-parsing and rate-limit tests run with no dependencies;
-         # the orchestrator end-to-end test needs a Postgres reachable at
-         # TEST_DATABASE_URL — see tests/conftest.py
+         # the orchestrator/filtering/multi-store tests need a Postgres
+         # reachable at TEST_DATABASE_URL — see tests/conftest.py
 ```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs lint + the
+full test suite against a real Postgres service container on every push and
+PR, then builds all three service images to catch Dockerfile breakage.
+New behavior should land test-first: add a failing test against the fake
+adapter in `tests/fakes.py` (or extend it), watch it fail for the right
+reason, then implement.

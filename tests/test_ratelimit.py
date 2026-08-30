@@ -16,7 +16,6 @@ def test_403_triggers_backoff_within_declared_window():
 
     before = datetime.now(timezone.utc)
     limiter.record_403()
-    after = datetime.now(timezone.utc)
 
     assert limiter.backing_off_until is not None
     delta = (limiter.backing_off_until - before).total_seconds()

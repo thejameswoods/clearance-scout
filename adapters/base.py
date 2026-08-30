@@ -31,6 +31,7 @@ class StoreInfo:
     zip_code: str
     name: str | None = None
     address: str | None = None
+    distance_miles: float | None = None
 
 
 @dataclass(frozen=True)
@@ -107,8 +108,19 @@ class RetailerAdapter(ABC):
         Raise NeedsLogin if not — never auto-retry a login internally."""
 
     @abstractmethod
-    def set_store(self, browser_ctx: Any, zip_code: str) -> StoreInfo:
-        """Resolve and select the nearest store for a ZIP code."""
+    def find_stores(
+        self, browser_ctx: Any, zip_code: str, radius_miles: float
+    ) -> Iterator[StoreInfo]:
+        """Resolve every store within radius_miles of a ZIP code — not just
+        the single nearest one. Watching "any clearance wire within 25
+        miles" means scanning every store in range, not picking one."""
+
+    @abstractmethod
+    def select_store(self, browser_ctx: Any, store: StoreInfo) -> None:
+        """Make `store` the active store for subsequent discover_departments
+        / list_products / check_price calls on this browser context. Split
+        from find_stores so the orchestrator can loop: find once, select+
+        scan once per store."""
 
     @abstractmethod
     def discover_departments(self, browser_ctx: Any) -> Iterator[Department]:

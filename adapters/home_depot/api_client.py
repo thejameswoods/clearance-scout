@@ -59,8 +59,10 @@ class HomeDepotApiClient:
         response_json = response.json()
         return response_json if isinstance(response_json, dict) else {"data": response_json}
 
-    def store_search(self, zip_code: str) -> dict[str, Any]:
-        return self._get(HD_ENDPOINTS["store_search"], {"zip": zip_code})
+    def store_search(self, zip_code: str, radius_miles: float) -> dict[str, Any]:
+        # Confirm the real param name/units for a radius search when you
+        # capture this endpoint — "radius" here is a placeholder guess.
+        return self._get(HD_ENDPOINTS["store_search"], {"zip": zip_code, "radius": radius_miles})
 
     def department_list(self, store_id: str) -> dict[str, Any]:
         return self._get(HD_ENDPOINTS["department_list"], {"storeId": store_id})

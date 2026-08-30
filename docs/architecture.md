@@ -46,6 +46,24 @@ account that's otherwise behaving like an ordinary shopper is a mismatch
 more likely to draw scrutiny, not less. Run it however you like, but the
 default assumes plain home internet.
 
+### Narrow by default, at the request level
+
+`WATCHED_DEPARTMENTS` and `WATCH_KEYWORDS` filter *what gets requested*,
+not just what the dashboard displays. The orchestrator resolves every store
+within `RADIUS_MILES` (`find_stores`), then for each store only lists
+products for departments whose name matches a watched substring, and only
+price-checks products whose name matches a watched keyword. An unwatched
+department's product list is never even requested. This isn't just a UX
+convenience — a smaller, targeted request footprint is also lower
+detection risk than crawling an entire store's catalog to filter it
+client-side afterward. Leaving both settings blank scans everything, which
+is the original (v1) behavior.
+
+An explicit single-department manual scan (dashboard button, or the bot's
+`/scan <department>`) overrides the watch list rather than being
+constrained by it — checking something outside your usual watch list on
+demand shouldn't require reconfiguring it first.
+
 ### Retailer-agnostic from the start
 
 Home Depot is the only implemented adapter, but the goal was always to add

@@ -10,8 +10,11 @@ Telegram bot only ever see the shared dataclasses (`Department`, `ProductRef`,
 ## The contract
 
 See the docstrings in [`base.py`](base.py) for the full method list. In short,
-a scan runs in three phases and your adapter drives each one:
+a scan finds every store in radius, then runs three phases per store, and
+your adapter drives each one:
 
+0. **`find_stores`** + **`select_store`** — every store within radius,
+   scanned in turn (see below).
 1. **`discover_departments`** — map the site's category structure.
 2. **`list_products`** — enumerate products per department. Don't dedupe
    against what's already in the DB yourself; the orchestrator owns that
@@ -24,7 +27,11 @@ Plus:
 - **`authenticate`** — is the persistent browser session still logged in?
   Raise `NeedsLogin` if not. Never try to log back in silently — that's a
   human-with-noVNC task, on purpose (CAPTCHAs, 2FA, ToS risk).
-- **`set_store`** — resolve a ZIP code to the retailer's nearest store.
+- **`find_stores`** — resolve every store within a radius of a ZIP code,
+  not just the nearest one, so a watch can span multiple nearby locations.
+- **`select_store`** — make one of those stores active on the browser
+  context for the department/product/price calls that follow. The
+  orchestrator calls this once per store per scan.
 - **`detect_clearance`** / **`detect_penny`** — pure functions over a raw
   API response / a `PriceObservation`. Keep these dependency-free so they're
   unit-testable against fixture JSON with no browser involved.

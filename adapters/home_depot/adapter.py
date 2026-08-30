@@ -44,16 +44,27 @@ class HomeDepotAdapter(RetailerAdapter):
             )
         return AuthResult(valid=True)
 
-    def set_store(self, browser_ctx: Any, zip_code: str) -> StoreInfo:
+    def find_stores(
+        self, browser_ctx: Any, zip_code: str, radius_miles: float
+    ) -> Iterator[StoreInfo]:
         client = HomeDepotApiClient(browser_ctx)
-        response = client.store_search(zip_code)
-        nearest = response["stores"][0]
-        return StoreInfo(
-            retailer_store_id=str(nearest["storeId"]),
-            zip_code=zip_code,
-            name=nearest.get("name"),
-            address=nearest.get("address"),
-        )
+        response = client.store_search(zip_code, radius_miles)
+        for raw in response.get("stores", []):
+            yield StoreInfo(
+                retailer_store_id=str(raw["storeId"]),
+                zip_code=zip_code,
+                name=raw.get("name"),
+                address=raw.get("address"),
+                distance_miles=raw.get("distance"),
+            )
+
+    def select_store(self, browser_ctx: Any, store: StoreInfo) -> None:
+        # Home Depot's site typically needs the store set via a page
+        # interaction/cookie, not just an API param — confirm the real
+        # mechanism from captured traffic (adapters/home_depot/api_client.py)
+        # and do it here if so. Recording the id on the context is enough
+        # for _require_store_id() either way.
+        browser_ctx.clearance_scout_store_id = store.retailer_store_id
 
     def discover_departments(self, browser_ctx: Any) -> Iterator[Department]:
         client = HomeDepotApiClient(browser_ctx)
@@ -134,6 +145,6 @@ class HomeDepotAdapter(RetailerAdapter):
         store_id = getattr(browser_ctx, "clearance_scout_store_id", None)
         if not store_id:
             raise RuntimeError(
-                "No store selected on this browser context — call set_store() first."
+                "No store selected on this browser context — call select_store() first."
             )
         return store_id

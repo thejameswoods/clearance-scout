@@ -24,8 +24,17 @@ from scanner.orchestrator import ScanAbortedNeedsLogin, run_scan
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("clearance_scout.scanner")
 
+def _split_env_list(name: str) -> list[str] | None:
+    raw = os.environ.get(name, "")
+    values = [s.strip() for s in raw.split(",") if s.strip()]
+    return values or None  # empty/unset means "no filter, scan everything"
+
+
 RETAILERS = [s.strip() for s in os.environ.get("RETAILERS", "home_depot").split(",") if s.strip()]
 ZIP_CODE = os.environ["ZIP_CODE"]
+RADIUS_MILES = float(os.environ.get("RADIUS_MILES", "25"))
+WATCHED_DEPARTMENTS = _split_env_list("WATCHED_DEPARTMENTS")
+WATCH_KEYWORDS = _split_env_list("WATCH_KEYWORDS")
 SCAN_INTERVAL_MINUTES = float(os.environ.get("SCAN_INTERVAL_MINUTES", "240"))
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
 TRIGGER_PORT = int(os.environ.get("TRIGGER_PORT", "8090"))
@@ -76,8 +85,11 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None) -> None:
         adapter = build_adapter(slug)
         try:
             with db.get_connection() as conn:
-                result = run_scan(conn, browser_ctx, adapter, ZIP_CODE, trigger=trigger,
-                                   department_filter=department_filter)
+                result = run_scan(
+                    conn, browser_ctx, adapter, ZIP_CODE, radius_miles=RADIUS_MILES,
+                    trigger=trigger, department_filter=department_filter,
+                    watched_departments=WATCHED_DEPARTMENTS, watch_keywords=WATCH_KEYWORDS,
+                )
             logger.info("Scan complete for %s: %s", slug, result)
             with _status_lock:
                 _status["last_scan_result"] = {slug: result}
