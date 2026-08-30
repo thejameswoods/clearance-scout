@@ -1,4 +1,4 @@
-playwright==1.47.0
+patchright==1.62.2
 fastapi==0.115.0
 uvicorn==0.30.6
 psycopg[binary]==3.2.1

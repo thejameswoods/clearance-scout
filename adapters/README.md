@@ -44,10 +44,13 @@ Plus:
 
 - **All requests go through the live browser context**, not a bare HTTP
   client with copied-out cookies. Use the context's own request API (e.g.
-  Playwright's `context.request`) or in-page `fetch()`. Bot detection on
-  most large retail sites keys on more than cookies — TLS/JA3 fingerprint,
-  browser fingerprint, timing — and a bare `requests.Session()` with stolen
-  cookies tends to get flagged even when the cookies are genuinely valid.
+  `context.request`, same on Patchright as vanilla Playwright — see
+  [`docs/architecture.md`](../docs/architecture.md#patchright-not-vanilla-playwright))
+  or in-page `fetch()`. Bot detection on most large retail sites keys on
+  more than cookies — TLS/JA3 fingerprint, browser fingerprint, timing, and
+  the CDP automation connection itself — and a bare `requests.Session()`
+  with stolen cookies tends to get flagged even when the cookies are
+  genuinely valid.
 - **Never store credentials or session tokens outside the browser profile
   volume.** The DB's `credential_session` table is metadata only
   (`valid` / `expired` / `needs_login`) — no adapter should ever write a

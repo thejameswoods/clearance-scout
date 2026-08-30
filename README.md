@@ -19,8 +19,9 @@ below). Each deployment is one person, one account, one home IP.**
 
 Four containers, one Docker Compose stack:
 
-- **`scanner`** — a real, persistent Chromium instance (Playwright) with
-  its own logged-in session. Runs a three-phase scan (map departments →
+- **`scanner`** — a real, persistent Chrome instance ([Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python),
+  not vanilla Playwright — see [`docs/architecture.md`](docs/architecture.md#patchright-not-vanilla-playwright))
+  with its own logged-in session. Runs a three-phase scan (map departments →
   collect product IDs → check prices) on a schedule, pacing requests and
   backing off hard on a 403 instead of hammering the site.
 - **`db`** — Postgres. Every price check is stored, so you get real

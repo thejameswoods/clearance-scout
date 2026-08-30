@@ -80,9 +80,41 @@ HDScanner's own description is that it calls Home Depot's product/pricing
 API "from within your browser tab" rather than treating it as a plain REST
 API. That phrasing implies detection likely isn't cookie-only — TLS/browser
 fingerprint and timing probably matter too. So every adapter call routes
-through the live Playwright browser context (its own request API, which
-shares cookies/headers/fingerprint with the real session), not a copied-out
+through the live browser context (its own request API, which shares
+cookies/headers/fingerprint with the real session), not a copied-out
 cookie jar in a separate HTTP client.
+
+### Patchright, not vanilla Playwright
+
+Confirmed live, not theoretical: Home Depot's real login API (`POST
+/customer/auth/v1/twostep/init`) returned 403 on the very first login
+attempt, before any meaningful request volume existed — that's
+fingerprint-based bot detection (Home Depot uses PerimeterX/HUMAN, visible
+from a separate CSP log referencing `px-cloud.net`), not rate-based
+blocking. Manually stripping the obvious tells (`navigator.webdriver` via
+launch args) wasn't enough, because the deeper leak is the CDP connection
+itself (`Runtime.enable`) that Playwright needs to drive the browser at
+all — not something JS-observable, so no amount of launch-arg tweaking
+touches it.
+
+[Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) is
+a maintained fork of Playwright's Python driver (not a plugin layered on
+top) that patches exactly this class of leak, and is a drop-in replacement
+for the `playwright` package (same API, `from patchright.sync_api import
+sync_playwright`). Used per its own documented "best practice" config:
+real Google Chrome (`channel="chrome"`, fetched via `patchright install
+chrome`, not the open-source Chromium build), `no_viewport=True`, and no
+custom user agent or headers.
+
+Worth naming honestly: this is an unofficial, community-maintained fork of
+core browser-automation internals, not something Microsoft/Anthropic
+vets — a real third-party trust call, not a purely technical one. It's the
+standard tool in this space for exactly this problem, and every adapter
+call still routes through whatever the orchestrator hands it (`Any`-typed
+`browser_ctx` in `adapters/base.py`), so this swap touched exactly three
+files (`scanner/main.py`, `scanner/Dockerfile`,
+`scanner/requirements.txt`) — no adapter code needed to know or care which
+library produced the browser context.
 
 ### One long-lived, persistent, human-authenticated browser identity
 

@@ -1,6 +1,9 @@
-# Playwright's own image ships Chromium + all its system deps prebuilt and
-# version-matched to the playwright pip package pinned in requirements.txt —
-# far less brittle than installing Chromium deps by hand on a generic base.
+# Microsoft's Playwright image, kept as the base purely for its prebaked
+# OS-level browser dependencies (fonts, codecs, etc.) even though the
+# vanilla `playwright` pip package itself isn't used anymore -- see
+# requirements.txt. `patchright install --with-deps chrome` below fetches
+# the real, patchright-compatible Chrome build and fills in anything this
+# base image doesn't already cover.
 FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 
 # Xvfb + x11vnc + noVNC: the scanner runs a real, visible (not headless)
@@ -19,6 +22,11 @@ WORKDIR /app
 
 COPY scanner/requirements.txt scanner/requirements.txt
 RUN pip install --no-cache-dir -r scanner/requirements.txt
+# Patchright bundles its own patched driver and needs its own browser
+# fetch -- the vanilla Chromium baked into the base image isn't it.
+# "chrome" (real Google Chrome), not "chromium", per patchright's own
+# documented best-practice config for staying undetected.
+RUN DEBIAN_FRONTEND=noninteractive patchright install --with-deps chrome
 
 COPY adapters/ adapters/
 COPY common/ common/

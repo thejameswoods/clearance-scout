@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import uvicorn
 from fastapi import FastAPI
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import sync_playwright
 
 from adapters.registry import build_adapter
 from common import db
@@ -119,24 +119,23 @@ def main() -> None:
     threading.Thread(target=_run_http_server, daemon=True).start()
 
     with sync_playwright() as playwright:
+        # Manual --disable-blink-features / ignore_default_args flags
+        # weren't enough (confirmed live: Home Depot's real login API
+        # 403'd on the very first attempt, no request volume yet -- that's
+        # fingerprint-based detection, not rate-based). Those tells are
+        # JS-observable; the deeper leak is the CDP connection itself
+        # (Runtime.enable), which no amount of launch-arg tweaking touches.
+        # Patchright patches that at the driver level instead of the
+        # browser-args level -- this is its own documented "best practice"
+        # config (real Chrome via channel="chrome", no_viewport, no custom
+        # UA/headers); it already handles the automation-flag patching
+        # internally, more thoroughly than the manual flags did.
         browser_ctx = playwright.chromium.launch_persistent_context(
             PROFILE_DIR,
+            channel="chrome",
             headless=False,  # a real, visible browser inside the container's Xvfb display
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                # Playwright's default launch is trivially fingerprinted as
-                # automated by any real anti-bot vendor (navigator.webdriver
-                # = true, plus other Blink-level "AutomationControlled"
-                # tells) -- confirmed live: Home Depot's actual login API
-                # (POST /customer/auth/v1/twostep/init) 403'd on the very
-                # first attempt, before any real request volume existed, so
-                # this is fingerprint-based detection, not rate-based.
-                "--disable-blink-features=AutomationControlled",
-            ],
-            # Also drops the "Chrome is being controlled by automated test
-            # software" infobar and the CDP flag that sets it.
-            ignore_default_args=["--enable-automation"],
+            no_viewport=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         logger.info("Persistent browser context ready (profile: %s)", PROFILE_DIR)
 
