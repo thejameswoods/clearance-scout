@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clearance Scout</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🛒 Clearance Scout</h1>
+    <div class="scan-status">
+      <span id="scan-state-badge" class="badge">checking…</span>
+      <button id="scan-now-btn">Scan now</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="deals">Deals</button>
+    <button class="tab-btn" data-tab="history">History</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <section id="tab-deals" class="tab-panel active">
+      <div class="filters">
+        <input id="f-search" type="search" placeholder="Search products…" />
+        <select id="f-department"><option value="">All departments</option></select>
+        <select id="f-store"><option value="">All stores</option></select>
+        <label><input type="checkbox" id="f-clearance" /> Clearance only</label>
+        <label><input type="checkbox" id="f-penny" /> Penny only</label>
+        <input id="f-min-discount" type="number" min="0" max="100" placeholder="Min % off" />
+        <select id="f-sort">
+          <option value="recent">Most recent</option>
+          <option value="discount">Biggest discount</option>
+        </select>
+      </div>
+      <div id="deal-grid" class="deal-grid"></div>
+    </section>
+
+    <section id="tab-history" class="tab-panel">
+      <div id="history-grid" class="deal-grid"></div>
+    </section>
+
+    <section id="tab-settings" class="tab-panel">
+      <div id="settings-content"></div>
+    </section>
+  </main>
+
+  <div id="deal-modal" class="modal hidden">
+    <div class="modal-content">
+      <button id="modal-close" class="modal-close">&times;</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
