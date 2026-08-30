@@ -56,7 +56,19 @@ class HomeDepotApiClient:
         response = self._ctx.request.get(f"{HD_BASE_URL}{path}", params=params or {})
         if response.status == 403:
             raise PermissionError(f"Home Depot returned 403 for {path}")
-        response_json = response.json()
+        try:
+            response_json = response.json()
+        except ValueError as exc:
+            # A non-JSON body almost always means HD_ENDPOINTS still holds a
+            # placeholder path (see this module's docstring) -- the request
+            # hit a real HTML page (login wall, 404, etc.), not an API.
+            # Surfaced clearly instead of a bare JSONDecodeError so it's
+            # obvious this adapter needs real captured endpoints, not that
+            # something is randomly broken.
+            raise RuntimeError(
+                f"Home Depot returned a non-JSON response for {path} (status {response.status}) — "
+                "this endpoint is still a placeholder; see adapters/home_depot/api_client.py."
+            ) from exc
         return response_json if isinstance(response_json, dict) else {"data": response_json}
 
     def store_search(self, zip_code: str, radius_miles: float) -> dict[str, Any]:

@@ -95,10 +95,21 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None) -> None:
                 _status["last_scan_result"] = {slug: result}
         except ScanAbortedNeedsLogin:
             logger.warning(
-                "%s session needs login — open noVNC and log in manually. Skipping until next cycle.", slug
+                "%s session needs login — open the dashboard's Browser tab and log in manually. "
+                "Skipping until next cycle.", slug
             )
             with _status_lock:
                 _status["last_scan_result"] = {slug: "needs_login"}
+        except Exception:
+            # A scan failure must never crash this process. Docker's
+            # restart policy has no backoff between restarts, so a crash
+            # here means hammering the retailer's site again within
+            # seconds, every time, with zero pacing -- exactly what the
+            # rate limiter exists to prevent. Log it and wait for the next
+            # scheduled interval instead.
+            logger.exception("%s scan failed unexpectedly — will retry next cycle", slug)
+            with _status_lock:
+                _status["last_scan_result"] = {slug: "error"}
 
     with _status_lock:
         _status["state"] = "idle"
