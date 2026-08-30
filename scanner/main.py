@@ -122,7 +122,21 @@ def main() -> None:
         browser_ctx = playwright.chromium.launch_persistent_context(
             PROFILE_DIR,
             headless=False,  # a real, visible browser inside the container's Xvfb display
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                # Playwright's default launch is trivially fingerprinted as
+                # automated by any real anti-bot vendor (navigator.webdriver
+                # = true, plus other Blink-level "AutomationControlled"
+                # tells) -- confirmed live: Home Depot's actual login API
+                # (POST /customer/auth/v1/twostep/init) 403'd on the very
+                # first attempt, before any real request volume existed, so
+                # this is fingerprint-based detection, not rate-based.
+                "--disable-blink-features=AutomationControlled",
+            ],
+            # Also drops the "Chrome is being controlled by automated test
+            # software" infobar and the CDP flag that sets it.
+            ignore_default_args=["--enable-automation"],
         )
         logger.info("Persistent browser context ready (profile: %s)", PROFILE_DIR)
 
