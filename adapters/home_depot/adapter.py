@@ -55,7 +55,11 @@ class HomeDepotAdapter(RetailerAdapter):
         response = client.store_search(zip_code, radius_miles)
         stores = response.get("data", {}).get("storeSearch", {}).get("stores") or []
         for raw in stores:
-            distance = raw.get("distance")
+            raw_distance = raw.get("distance")
+            # storeSearch returns distance as a numeric string, not a
+            # number (confirmed live 2026-08-31, contra the earlier
+            # assumption baked into StoreInfo's type).
+            distance = float(raw_distance) if raw_distance is not None else None
             # storeSearch has no radius param of its own (confirmed --
             # HDScanner doesn't use one either); apply it client-side.
             if distance is not None and distance > radius_miles:
