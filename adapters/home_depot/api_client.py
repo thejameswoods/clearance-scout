@@ -8,17 +8,19 @@ independent rewrite).
 All calls are POSTs to GRAPHQL_URL with `?opname=<operation>` and a JSON
 body of `{operationName, variables, query}`.
 
-Transport: routed through browser-extension/home_depot/'s content script
-(original code, not a fork of anything -- see that directory), not
-`context.request` or a bare in-page `fetch()` via page.evaluate(). Both of
-those were tried first and both got a generic degraded response from Home
-Depot's real API even using these exact confirmed-correct queries (see
-docs/architecture.md for the full debugging trail) -- a real, installed
-content script is a different execution context than either, and is what
-this now uses. `_graphql()` bridges to it via `window.postMessage` (see
-content.js): Playwright's `page.evaluate()` runs in the page's main world,
-content scripts run in an isolated world, and postMessage is the standard
-way to cross that boundary.
+Transport: a direct in-page `fetch()` via `page.evaluate()`, not routed
+through browser-extension/home_depot/'s content script. That extension
+bridge was built and tested specifically to rule execution-context in or
+out as the variable behind Home Depot's generic degraded API response (see
+docs/architecture.md) -- the result was identical (same degraded response)
+via `context.request`, in-page `fetch()`, *and* a genuinely-loaded content
+script under vanilla Playwright, which rules execution context out
+entirely. Since the extension buys nothing functionally and Patchright
+silently drops `--load-extension`/`--disable-extensions-except` (its own
+anti-detection arg sanitization strips them, confirmed via isolated
+diagnostic), routing through it just adds a dead bridge that times out
+every call. `_graphql()` now does the fetch directly in `page.evaluate()`,
+using the same headers confirmed from content.js.
 
 Home Depot's own bot-management layer for this API is Akamai (a 403/429
 here is Akamai, not PerimeterX — PerimeterX guards the login flow
@@ -31,15 +33,11 @@ between batches, conservative parallelism (2-5 concurrent requests).
 from __future__ import annotations
 
 import json
-import secrets
 from typing import Any
 
 HOME_URL = "https://www.homedepot.com/"
-BRIDGE_TIMEOUT_MS = 20000
 
 GRAPHQL_URL = "https://apionline.homedepot.com/federation-gateway/graphql"
-# Headers are set inside content.js now, not here -- the content script
-# performs the actual fetch(), this module only builds the request body.
 
 # Home Depot's own documented max for a single mediaPriceInventory call.
 PRICE_CHECK_MAX_BATCH = 16
@@ -149,32 +147,28 @@ class HomeDepotApiClient:
         return page
 
     def _graphql(self, operation: str, variables: dict[str, Any], query: str) -> dict[str, Any]:
-        request_id = secrets.token_hex(8)
         body = {"operationName": operation, "variables": variables, "query": query}
+        # Headers confirmed from HDScanner's own content-script fetch() call
+        # (see this module's docstring) -- reproduced directly here now that
+        # the extension bridge that used to send them is gone.
         result = self._page.evaluate(
             """
-            ({ requestId, url, body, timeoutMs }) => new Promise((resolve) => {
-                function handler(event) {
-                    if (event.source !== window) return;
-                    const msg = event.data;
-                    if (!msg || msg.type !== "CS_SCOUT_GRAPHQL_RESPONSE" || msg.requestId !== requestId) return;
-                    window.removeEventListener("message", handler);
-                    clearTimeout(timer);
-                    resolve(msg);
-                }
-                const timer = setTimeout(() => {
-                    window.removeEventListener("message", handler);
-                    resolve({ status: 0, body: null, error: "bridge timeout -- is the extension loaded?" });
-                }, timeoutMs);
-                window.addEventListener("message", handler);
-                window.postMessage({ type: "CS_SCOUT_GRAPHQL_REQUEST", requestId, url, body }, "*");
-            })
+            ({ url, body }) => fetch(url, {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-experience-name": "general-merchandise",
+                },
+                body: JSON.stringify(body),
+            }).then(async (response) => ({ status: response.status, body: await response.text() }))
+              .catch((e) => ({ status: 0, body: null, error: String(e) }))
             """,
-            {"requestId": request_id, "url": f"{GRAPHQL_URL}?opname={operation}", "body": body, "timeoutMs": BRIDGE_TIMEOUT_MS},
+            {"url": f"{GRAPHQL_URL}?opname={operation}", "body": body},
         )
 
         if result.get("status") == 0:
-            raise RuntimeError(f"Extension bridge failed for {operation}: {result.get('error')}")
+            raise RuntimeError(f"Fetch failed for {operation}: {result.get('error')}")
         if result["status"] in (403, 429):
             raise PermissionError(f"Home Depot (Akamai) returned {result['status']} for {operation}")
         try:

@@ -12,7 +12,6 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
@@ -39,11 +38,6 @@ WATCH_KEYWORDS = _split_env_list("WATCH_KEYWORDS")
 SCAN_INTERVAL_MINUTES = float(os.environ.get("SCAN_INTERVAL_MINUTES", "240"))
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
 TRIGGER_PORT = int(os.environ.get("TRIGGER_PORT", "8090"))
-# One subdirectory per retailer extension (browser-extension/<slug>/,
-# each with its own manifest.json) -- all loaded together. See
-# docs/architecture.md for why real API calls need to originate from an
-# installed content script, not context.request or page.evaluate().
-EXTENSIONS_DIR = Path(os.environ.get("EXTENSIONS_DIR", "/app/browser-extension"))
 
 _trigger_event = threading.Event()
 _trigger_department: str | None = None
@@ -136,21 +130,18 @@ def main() -> None:
         # config (real Chrome via channel="chrome", no_viewport, no custom
         # UA/headers); it already handles the automation-flag patching
         # internally, more thoroughly than the manual flags did.
-        extension_dirs = sorted(EXTENSIONS_DIR.iterdir()) if EXTENSIONS_DIR.is_dir() else []
-        extension_paths = ",".join(str(p) for p in extension_dirs if p.is_dir())
-        extension_args = (
-            [f"--disable-extensions-except={extension_paths}", f"--load-extension={extension_paths}"]
-            if extension_paths else []
-        )
-        if not extension_paths:
-            logger.warning("No browser extensions found under %s -- adapters that need one will fail", EXTENSIONS_DIR)
-
+        #
+        # No --load-extension here: Patchright silently strips that flag
+        # (and --disable-extensions-except) as part of its own anti-detection
+        # arg sanitization (confirmed via isolated diagnostic), so passing it
+        # is a no-op, not a degraded fallback. adapters/home_depot no longer
+        # depends on a loaded extension either way -- see api_client.py.
         browser_ctx = playwright.chromium.launch_persistent_context(
             PROFILE_DIR,
             channel="chrome",
             headless=False,  # a real, visible browser inside the container's Xvfb display
             no_viewport=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", *extension_args],
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         logger.info("Persistent browser context ready (profile: %s)", PROFILE_DIR)
 
