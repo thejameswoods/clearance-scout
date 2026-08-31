@@ -52,6 +52,7 @@ button {
   font-weight: 600;
 }
 button:hover { opacity: 0.9; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .tabs {
   display: flex;

@@ -39,3 +39,19 @@ def health():
 # shadow the /api routes above.
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    # StaticFiles only sends Last-Modified/ETag by default, which leaves
+    # browsers free to serve a stale copy from heuristic caching with no
+    # request at all -- confirmed live 2026-08-31: an old cached index.html
+    # (looking for a since-removed element) paired with a freshly-served
+    # app.js broke the page silently on every redeploy until a hard
+    # refresh. This forces revalidation on every load for the frontend
+    # (not /api/* or /vnc/*, which already set their own semantics) --
+    # cheap for a small, low-traffic LAN dashboard.
+    response = await call_next(request)
+    if not request.url.path.startswith(("/api/", "/vnc/")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response

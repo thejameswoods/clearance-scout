@@ -46,6 +46,7 @@ class ConfigurableFakeAdapter(RetailerAdapter):
             ]
         }
         self.price_cents = price_cents
+        self.list_products_call_count = 0
 
     def authenticate(self, browser_ctx) -> AuthResult:
         return AuthResult(valid=True)
@@ -60,6 +61,7 @@ class ConfigurableFakeAdapter(RetailerAdapter):
         yield from self.departments
 
     def list_products(self, browser_ctx, department: Department) -> Iterator[ProductRef]:
+        self.list_products_call_count += 1
         yield from self.products_by_department.get(department.retailer_department_id, [])
 
     def check_price(self, browser_ctx, product_ref: ProductRef, store: StoreInfo) -> PriceObservation:

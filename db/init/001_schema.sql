@@ -21,11 +21,12 @@ CREATE TABLE store (
 );
 
 CREATE TABLE department (
-    id                      SERIAL PRIMARY KEY,
-    retailer_id             INTEGER NOT NULL REFERENCES retailer(id) ON DELETE CASCADE,
-    retailer_department_id  TEXT NOT NULL,
-    name                    TEXT NOT NULL,
-    parent_department_id    INTEGER REFERENCES department(id) ON DELETE SET NULL,
+    id                        SERIAL PRIMARY KEY,
+    retailer_id               INTEGER NOT NULL REFERENCES retailer(id) ON DELETE CASCADE,
+    retailer_department_id    TEXT NOT NULL,
+    name                      TEXT NOT NULL,
+    parent_department_id      INTEGER REFERENCES department(id) ON DELETE SET NULL,
+    products_last_listed_at   TIMESTAMPTZ,
     UNIQUE (retailer_id, retailer_department_id)
 );
 

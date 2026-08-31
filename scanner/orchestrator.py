@@ -7,8 +7,9 @@ test_multi_store.py) run through to prove the abstraction actually holds.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
-from adapters.base import Department, NeedsLogin, RetailerAdapter
+from adapters.base import Department, NeedsLogin, ProductRef, RetailerAdapter
 from common import db
 from scanner.ratelimit import RateLimiter
 
@@ -51,6 +52,7 @@ def run_scan(
     department_filter: str | None = None,
     watched_departments: list[str] | None = None,
     watch_keywords: list[str] | None = None,
+    product_list_cache_hours: float = 24.0,
 ) -> dict:
     """Runs one full scan (auth check -> stores in radius -> departments ->
     products -> prices) for one retailer, writing results to Postgres as it
@@ -61,6 +63,17 @@ def run_scan(
     price-checked) — not just what the dashboard displays afterward. Both
     are case-insensitive substring matches; leave unset to scan everything
     (the original, unfiltered behavior).
+
+    `product_list_cache_hours`: phase 2 (which products exist in a
+    department) is request-heavy (multiple paginated calls per department)
+    but changes far less often than phase 3 (current price/clearance,
+    which must always be checked fresh -- that's the entire point of a
+    scan). Re-listing on every single scan was pure waste -- confirmed
+    live 2026-08-31, a big contributor to a multi-hour scan across 71
+    departments that led to a memory-exhaustion incident (GitHub issue #4).
+    A department already listed within this window is served from the
+    `product` table (see common/db.py's product-ID cache) instead of
+    re-querying the retailer.
     """
 
     retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_slug, "")
@@ -105,13 +118,29 @@ def run_scan(
             )
             departments_scanned += 1
 
+            last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
+            cache_is_fresh = (
+                last_listed_at is not None
+                and datetime.now(timezone.utc) - last_listed_at < timedelta(hours=product_list_cache_hours)
+            )
+
             scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "products", trigger)
-            try:
-                all_product_refs = list(adapter.list_products(browser_ctx, department))
-            except Exception:
-                logger.exception("Failed listing products for department %s", department.name)
-                db.finish_scan_run(conn, scan_run_id, "failed", 0, 1)
-                continue
+            if cache_is_fresh:
+                all_product_refs = [
+                    ProductRef(
+                        retailer_product_id=row["retailer_product_id"], name=row["name"],
+                        department=department, upc=row["upc"], image_url=row["image_url"],
+                    )
+                    for row in db.list_cached_products_for_department(conn, department_id)
+                ]
+            else:
+                try:
+                    all_product_refs = list(adapter.list_products(browser_ctx, department))
+                except Exception:
+                    logger.exception("Failed listing products for department %s", department.name)
+                    db.finish_scan_run(conn, scan_run_id, "failed", 0, 1)
+                    continue
+                db.mark_department_products_listed(conn, department_id)
             product_refs = [p for p in all_product_refs if _matches_any(p.name, watch_keywords)]
             db.finish_scan_run(conn, scan_run_id, "completed", len(product_refs), 0)
 

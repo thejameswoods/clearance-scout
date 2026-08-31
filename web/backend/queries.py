@@ -183,6 +183,49 @@ def list_departments(conn) -> list[dict[str, Any]]:
     ).fetchall()
 
 
+def build_department_hierarchy(names: list[str]) -> list[dict[str, Any]]:
+    """Home Depot's own department names are already a full breadcrumb
+    flattened into one space-joined string by its URL scheme (see
+    adapters/home_depot/departments.py) -- "Electrical Batteries AA
+    Batteries" *is* Electrical > Electrical Batteries > AA Batteries, just
+    with no separate parent_department_id populated (orchestrator.py never
+    resolves that -- a "nice to have", per its own comment). Rather than
+    showing the dashboard's department filter as one flat, messy list of
+    concatenated strings, reconstruct the hierarchy here: a child's full
+    name always starts with its parent's full name, so each name's parent
+    is the longest *other* name in the set that's a real word-boundary
+    prefix of it. Returns a parent-before-children ordering with `depth`
+    (for indentation) and `label` (the name with its parent's prefix
+    stripped, so each level only shows what's new)."""
+    unique_names = sorted(set(names))
+    children: dict[str | None, list[str]] = {}
+    parent_of: dict[str, str | None] = {}
+
+    for name in unique_names:
+        best_parent = None
+        for candidate in unique_names:
+            if candidate == name:
+                continue
+            if name.startswith(candidate + " ") and (best_parent is None or len(candidate) > len(best_parent)):
+                best_parent = candidate
+        parent_of[name] = best_parent
+        children.setdefault(best_parent, []).append(name)
+
+    result: list[dict[str, Any]] = []
+
+    def visit(name: str, depth: int) -> None:
+        parent = parent_of[name]
+        label = name[len(parent) + 1 :] if parent else name
+        result.append({"name": name, "depth": depth, "label": label})
+        for child in sorted(children.get(name, [])):
+            visit(child, depth + 1)
+
+    for root in sorted(children.get(None, [])):
+        visit(root, 0)
+
+    return result
+
+
 def telegram_binding_status(conn) -> dict[str, Any]:
     row = conn.execute(
         "SELECT count(*) AS alerts_sent, max(sent_at) AS last_alert_at FROM alert_sent"

@@ -348,7 +348,12 @@ async function loadFilterOptions() {
   departments.forEach((dep) => {
     const opt = document.createElement("option");
     opt.value = dep.id;
-    opt.textContent = dep.name;
+    // Backend reconstructs hierarchy from Home Depot's flattened breadcrumb
+    // names (see build_department_hierarchy) -- indent by depth and show
+    // only the new part of the name at each level, so "Electrical > Doorbells
+    // > Bell Wire" reads as a tree instead of three copies of "Electrical".
+    opt.textContent = "    ".repeat(dep.depth || 0) + (dep.label || dep.name);
+    opt.title = dep.name;
     deptSel.appendChild(opt);
   });
   const storeSel = $("#f-store");
@@ -401,12 +406,31 @@ async function loadLogs() {
   }
 }
 
+const SCAN_STATE_LABELS = {
+  starting: "Starting up…",
+  scanning: "Scanning…",
+  idle: "Idle",
+  unreachable: "Scanner unreachable",
+  unknown: "Unknown",
+};
+
 async function refreshScanStatus() {
   const status = await api("/api/scan/status");
   const badge = $("#scan-state-badge");
   const state = status.scanner.state || "unknown";
-  badge.textContent = state;
+  badge.textContent = SCAN_STATE_LABELS[state] || state;
+  badge.title = state === "idle"
+    ? "Not currently scanning — \"Scan now\" will start one immediately."
+    : "A scan is in progress — \"Scan now\" is disabled until it finishes.";
   badge.className = `badge ${state}`;
+
+  // Disabled while a scan is already running so it's never ambiguous
+  // whether clicking does anything -- confirmed source of confusion
+  // 2026-08-31 (the button was always clickable regardless of state).
+  const btn = $("#scan-now-btn");
+  const scanInProgress = state === "scanning" || state === "starting";
+  btn.disabled = scanInProgress;
+  btn.textContent = scanInProgress ? "Scanning…" : "Scan now";
 }
 
 // noVNC's own client page, proxied same-origin through /vnc/* (see

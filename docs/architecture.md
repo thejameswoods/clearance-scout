@@ -196,6 +196,24 @@ future adapter for a retailer that genuinely requires login for pricing
 should implement a real `authenticate()` check rather than assuming this
 pattern (login not required) generalizes.
 
+### Product-ID listing is cached; price checks never are
+
+Phase 2 (which products exist in a department) and phase 3 (a product's
+current price/clearance) have very different freshness requirements, but
+every scan re-ran both from scratch until 2026-08-31 -- confirmed live as
+a real contributor to a multi-hour, 71-department scan that led to a
+memory-exhaustion incident (`GitHub issue #4`). Product IDs rarely change;
+current price/clearance is the entire point of scanning and must always
+be checked fresh. `department.products_last_listed_at` tracks when a
+department was last listed; within `PRODUCT_LIST_CACHE_HOURS` (default
+24), `run_scan` builds `ProductRef`s from the existing `product` table
+(`common/db.py`'s `list_cached_products_for_department`) instead of
+calling the adapter's `list_products()` again -- phase 3 still runs
+against every one of those products, unaffected. This also means multiple
+stores in one scan run only pay the phase-2 cost once, since the same
+department gets discovered per store but the cache is now warm after the
+first.
+
 ### Manual pacing/backoff engine, adapter-declared
 
 Scraping is paced deliberately, and a 403 triggers an escalating backoff

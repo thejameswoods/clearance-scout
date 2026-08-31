@@ -23,7 +23,13 @@ def stores():
 @router.get("/departments")
 def departments():
     with db.get_connection() as conn:
-        return queries.list_departments(conn)
+        rows = queries.list_departments(conn)
+    hierarchy = queries.build_department_hierarchy([r["name"] for r in rows])
+    by_name = {r["name"]: r for r in rows}
+    return [
+        {**by_name[h["name"]], "depth": h["depth"], "label": h["label"]}
+        for h in hierarchy
+    ]
 
 
 @router.get("/telegram")

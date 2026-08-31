@@ -72,6 +72,30 @@ def upsert_department(conn, retailer_id: int, retailer_department_id: str, name:
     return row["id"]
 
 
+def get_department_products_last_listed_at(conn, department_id: int) -> datetime | None:
+    row = conn.execute(
+        "SELECT products_last_listed_at FROM department WHERE id = %s", (department_id,)
+    ).fetchone()
+    return row["products_last_listed_at"] if row else None
+
+
+def mark_department_products_listed(conn, department_id: int) -> None:
+    conn.execute(
+        "UPDATE department SET products_last_listed_at = now() WHERE id = %s", (department_id,)
+    )
+
+
+def list_cached_products_for_department(conn, department_id: int) -> list[dict[str, Any]]:
+    """The product-ID cache list_products() would otherwise re-fetch from
+    the retailer's API on every scan -- see orchestrator.py's use of this
+    alongside get_department_products_last_listed_at/
+    mark_department_products_listed."""
+    return conn.execute(
+        "SELECT retailer_product_id, name, upc, image_url FROM product WHERE department_id = %s",
+        (department_id,),
+    ).fetchall()
+
+
 def upsert_product(conn, retailer_id: int, retailer_product_id: str, name: str,
                     department_id: int | None, upc: str | None, image_url: str | None) -> int:
     row = conn.execute(

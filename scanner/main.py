@@ -44,6 +44,14 @@ RADIUS_MILES = float(os.environ.get("RADIUS_MILES", "25"))
 WATCHED_DEPARTMENTS = _split_env_list("WATCHED_DEPARTMENTS")
 WATCH_KEYWORDS = _split_env_list("WATCH_KEYWORDS")
 SCAN_INTERVAL_MINUTES = float(os.environ.get("SCAN_INTERVAL_MINUTES", "240"))
+# Every container start otherwise kicks off a full scan immediately, which
+# is right for production (resume after a crash/restart) but actively
+# hostile to iterating on code -- confirmed live 2026-08-31: a normal
+# redeploy re-triggered the same multi-hour scan that had just caused an
+# OOM incident, seconds after the fix for it shipped. Set false while
+# actively developing; "Scan now" (dashboard/bot) still works regardless.
+SCAN_ON_STARTUP = os.environ.get("SCAN_ON_STARTUP", "true").lower() not in ("false", "0", "")
+PRODUCT_LIST_CACHE_HOURS = float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24"))
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
 TRIGGER_PORT = int(os.environ.get("TRIGGER_PORT", "8090"))
 
@@ -102,6 +110,7 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None) -> None:
                     conn, browser_ctx, adapter, ZIP_CODE, radius_miles=RADIUS_MILES,
                     trigger=trigger, department_filter=department_filter,
                     watched_departments=WATCHED_DEPARTMENTS, watch_keywords=WATCH_KEYWORDS,
+                    product_list_cache_hours=PRODUCT_LIST_CACHE_HOURS,
                 )
             logger.info("Scan complete for %s: %s", slug, result)
             with _status_lock:
@@ -158,14 +167,23 @@ def main() -> None:
         )
         logger.info("Persistent browser context ready (profile: %s)", PROFILE_DIR)
 
+        first_iteration = True
         while True:
             department_filter = None
             if _trigger_event.is_set():
                 department_filter = _trigger_department
                 _trigger_event.clear()
                 _scan_all(browser_ctx, trigger="manual", department_filter=department_filter)
+            elif first_iteration and not SCAN_ON_STARTUP:
+                logger.info(
+                    "SCAN_ON_STARTUP=false -- skipping the immediate scan; "
+                    "waiting for a manual trigger or the next scheduled interval"
+                )
+                with _status_lock:
+                    _status["state"] = "idle"
             else:
                 _scan_all(browser_ctx, trigger="scheduled", department_filter=None)
+            first_iteration = False
 
             # Sleep in short increments so a trigger during the wait is
             # picked up promptly instead of after the full interval.
