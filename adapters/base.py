@@ -72,6 +72,7 @@ class PriceObservation:
     is_clearance: bool = False
     is_penny: bool = False
     fulfillment_state: str | None = None
+    stock_quantity: int | None = None
     aisle: str | None = None
     bay: str | None = None
     raw_signal: dict[str, Any] = field(default_factory=dict)

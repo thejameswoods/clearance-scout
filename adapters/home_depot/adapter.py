@@ -15,6 +15,7 @@ from ..base import (
 from .api_client import HomeDepotApiClient
 from .clearance import detect_clearance as _detect_clearance
 from .clearance import effective_price as _effective_price
+from .clearance import stock_quantity as _stock_quantity
 from .departments import discover_departments as _discover_departments
 from .penny import detect_penny as _detect_penny
 
@@ -183,6 +184,7 @@ class HomeDepotAdapter(RetailerAdapter):
             ),
             is_clearance=is_clearance,
             fulfillment_state=fulfillment_state,
+            stock_quantity=_stock_quantity(raw),
             aisle=aisle,
             bay=bay,
             raw_signal=raw,

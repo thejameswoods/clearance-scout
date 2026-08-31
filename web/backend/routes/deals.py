@@ -38,6 +38,13 @@ def get_deal(deal_id: int):
     return deal
 
 
+@router.post("/{deal_id}/save")
+def save_to_list(deal_id: int):
+    with db.get_connection() as conn:
+        queries.set_deal_status(conn, deal_id, "saved")
+    return {"ok": True}
+
+
 @router.post("/{deal_id}/bought")
 def mark_bought(deal_id: int):
     with db.get_connection() as conn:

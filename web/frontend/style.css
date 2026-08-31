@@ -158,6 +158,73 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 table.history-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
 table.history-table th, table.history-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
 
+.table-wrap { overflow-x: auto; }
+table.deal-table, table.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.deal-table th, .detail-table th {
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.deal-table td, .detail-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  font-size: 0.88rem;
+}
+.deal-table tr:last-child td, .detail-table tr:last-child td { border-bottom: none; }
+.deal-table tbody tr:hover { background: var(--bg); cursor: pointer; }
+.deal-table .thumb, .detail-table .thumb {
+  width: 48px; height: 48px; object-fit: contain; background: #fafafa; border-radius: 6px;
+}
+.deal-table .product-name, .detail-table .product-name { font-weight: 600; }
+.deal-table .product-dept, .detail-table .product-dept { font-size: 0.76rem; color: var(--text-dim); }
+.discount-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff4e0;
+  color: var(--yellow);
+}
+.discount-badge.penny { background: #fdecea; color: var(--danger); }
+.deal-table .action-col, .detail-table .action-col { display: flex; gap: 6px; flex-wrap: wrap; }
+.deal-table .action-col button, .detail-table .action-col button { font-size: 0.78rem; padding: 6px 10px; }
+.deal-table .action-col button.secondary, .detail-table .action-col button.secondary { background: var(--border); color: var(--text); }
+.store-address-link { color: var(--accent); text-decoration: none; }
+.store-address-link:hover { text-decoration: underline; }
+.stock-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+.stock-dot.low { background: var(--yellow); }
+.stock-dot.ok { background: var(--green); }
+
+.shopping-store-group { margin-bottom: 22px; }
+.shopping-store-group h3 { margin: 0 0 4px; font-size: 1rem; }
+.shopping-store-group .store-address-link { font-size: 0.8rem; }
+.shopping-section { margin: 10px 0 0 4px; }
+.shopping-section h4 { margin: 0 0 6px; font-size: 0.82rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.shopping-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.shopping-item .thumb { width: 36px; height: 36px; object-fit: contain; background: #fafafa; border-radius: 6px; }
+.shopping-item .name { flex: 1; font-weight: 600; font-size: 0.86rem; }
+.shopping-item .price { font-weight: 700; color: var(--accent); }
+
 #settings-content dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
 #settings-content dt { font-weight: 600; color: var(--text-dim); }
 

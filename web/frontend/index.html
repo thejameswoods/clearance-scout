@@ -17,6 +17,7 @@
 
   <nav class="tabs">
     <button class="tab-btn active" data-tab="deals">Deals</button>
+    <button class="tab-btn" data-tab="shopping">Shopping List</button>
     <button class="tab-btn" data-tab="history">History</button>
     <button class="tab-btn" data-tab="browser">Browser</button>
     <button class="tab-btn" data-tab="logs">Logs</button>
@@ -37,7 +38,23 @@
           <option value="discount">Biggest discount</option>
         </select>
       </div>
-      <div id="deal-grid" class="deal-grid"></div>
+      <div class="table-wrap">
+        <table class="deal-table">
+          <thead>
+            <tr>
+              <th>Image</th><th>Product</th><th>Price</th><th>Discount</th>
+              <th>Added</th><th>Locations</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="deal-table-body"></tbody>
+        </table>
+        <p id="deal-table-empty" class="meta" hidden>No deals matching these filters yet — trigger a scan or widen your filters.</p>
+      </div>
+    </section>
+
+    <section id="tab-shopping" class="tab-panel">
+      <p class="meta">Items you've saved, grouped by store and department/aisle.</p>
+      <div id="shopping-list-content"></div>
     </section>
 
     <section id="tab-history" class="tab-panel">

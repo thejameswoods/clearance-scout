@@ -79,6 +79,7 @@ CREATE TABLE price_observation (
     is_clearance      BOOLEAN NOT NULL DEFAULT false,
     is_penny          BOOLEAN NOT NULL DEFAULT false,
     fulfillment_state TEXT,
+    stock_quantity    INTEGER,
     raw_signal        JSONB
 );
 CREATE INDEX idx_price_observation_product_time ON price_observation (product_id, observed_at DESC);
@@ -93,7 +94,7 @@ CREATE TABLE deal (
     first_observation_id   INTEGER NOT NULL REFERENCES price_observation(id),
     latest_observation_id  INTEGER NOT NULL REFERENCES price_observation(id),
     status                 TEXT NOT NULL DEFAULT 'new'
-                            CHECK (status IN ('new', 'active', 'stale', 'bought', 'dismissed')),
+                            CHECK (status IN ('new', 'active', 'stale', 'saved', 'bought', 'dismissed')),
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (product_id, store_id)

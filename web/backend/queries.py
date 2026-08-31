@@ -55,10 +55,11 @@ def list_deals(
             d.id AS deal_id, d.status, d.created_at, d.updated_at,
             p.id AS product_id, p.retailer_product_id, p.name AS product_name,
             p.image_url, p.department_id, dept.name AS department_name,
-            s.id AS store_id, s.name AS store_name,
+            s.id AS store_id, s.name AS store_name, s.address AS store_address,
+            s.retailer_store_id,
             r.slug AS retailer_slug, r.display_name AS retailer_name,
             po.price_cents, po.list_price_cents, po.is_clearance, po.is_penny,
-            po.fulfillment_state, po.observed_at,
+            po.fulfillment_state, po.stock_quantity, po.observed_at,
             CASE WHEN po.list_price_cents > 0
                  THEN round(100.0 * (po.list_price_cents - po.price_cents) / po.list_price_cents, 1)
                  ELSE NULL END AS discount_pct,

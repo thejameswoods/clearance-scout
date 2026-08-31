@@ -12,6 +12,51 @@ function money(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+function relTime(dateStr) {
+  if (!dateStr) return "";
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function mapsLink(address) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+}
+
+function priceRangeText(rows) {
+  const prices = rows.map((r) => r.price_cents);
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  return lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`;
+}
+
+function discountBadge(rows) {
+  const pcts = rows.map((r) => r.discount_pct).filter((p) => p != null);
+  const anyPenny = rows.some((r) => r.is_penny);
+  const cls = anyPenny ? "discount-badge penny" : "discount-badge";
+  if (pcts.length === 0) return anyPenny ? `<span class="${cls}">Penny</span>` : "";
+  const lo = Math.min(...pcts), hi = Math.max(...pcts);
+  const text = lo === hi ? `${lo}%` : `${lo}%–${hi}%`;
+  return `<span class="${cls}">${text}</span>`;
+}
+
+// Groups per-store deal rows (what /api/deals returns) into one entry per
+// product -- price/discount range + location count, matching how the
+// dashboard's Deals table displays a product once rather than once per
+// store. Detail modal (openProductDetail) drills back into the individual
+// per-store rows kept here.
+function groupByProduct(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (!groups.has(r.product_id)) groups.set(r.product_id, []);
+    groups.get(r.product_id).push(r);
+  }
+  return groups;
+}
+
 function dealCard(d) {
   const el = document.createElement("div");
   el.className = "deal-card";
@@ -52,12 +97,199 @@ async function loadDeals() {
   params.set("sort", sort);
 
   const deals = await api(`/api/deals?${params.toString()}`);
-  const grid = $("#deal-grid");
-  grid.innerHTML = "";
-  if (deals.length === 0) {
-    grid.innerHTML = `<p style="color:var(--text-dim)">No deals matching these filters yet — trigger a scan or widen your filters.</p>`;
+  window._dealGroups = groupByProduct(deals);
+  renderDealsTable(window._dealGroups);
+}
+
+function renderDealsTable(groups) {
+  const body = $("#deal-table-body");
+  const empty = $("#deal-table-empty");
+  body.innerHTML = "";
+  empty.hidden = groups.size > 0;
+
+  for (const [productId, rows] of groups) {
+    const first = rows[0];
+    const addedAt = rows.reduce((min, r) => (r.created_at < min ? r.created_at : min), first.created_at);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${first.image_url ? `<img class="thumb" src="${first.image_url}" alt="">` : ""}</td>
+      <td>
+        <div class="product-name">${escapeHtml(first.product_name)}</div>
+        ${first.department_name ? `<div class="product-dept">${escapeHtml(first.department_name)}</div>` : ""}
+      </td>
+      <td>${priceRangeText(rows)}</td>
+      <td>${discountBadge(rows)}</td>
+      <td>${relTime(addedAt)}</td>
+      <td>${rows.length} Store${rows.length === 1 ? "" : "s"}</td>
+      <td class="action-col">
+        <button class="save-btn" data-product="${productId}">Save</button>
+        <button class="secondary share-btn" data-product="${productId}">Share Link</button>
+      </td>
+    `;
+    tr.addEventListener("click", (ev) => {
+      if (ev.target.closest("button")) return;
+      openProductDetail(productId);
+    });
+    body.appendChild(tr);
   }
-  deals.forEach((d) => grid.appendChild(dealCard(d)));
+
+  body.querySelectorAll(".save-btn").forEach((btn) =>
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const rows = window._dealGroups.get(Number(btn.dataset.product));
+      await Promise.all(rows.map((r) => api(`/api/deals/${r.deal_id}/save`, { method: "POST" })));
+      refreshActiveTab();
+    })
+  );
+  body.querySelectorAll(".share-btn").forEach((btn) =>
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      shareProductLink(Number(btn.dataset.product));
+    })
+  );
+}
+
+function shareProductLink(productId) {
+  const url = `${location.origin}${location.pathname}?product=${productId}`;
+  navigator.clipboard?.writeText(url).catch(() => {});
+  window.prompt("Link to this deal (copied to clipboard if supported):", url);
+}
+
+function openProductDetail(productId) {
+  const rows = window._dealGroups?.get(productId);
+  if (!rows) return;
+  const first = rows[0];
+  const body = $("#modal-body");
+
+  const detailRows = rows
+    .map((r) => {
+      const stockText = r.stock_quantity != null ? `${r.stock_quantity} left` : (r.fulfillment_state || "");
+      const stockClass = r.stock_quantity != null && r.stock_quantity <= 5 ? "low" : "ok";
+      return `
+        <tr>
+          <td>${r.image_url ? `<img class="thumb" src="${r.image_url}" alt="">` : ""}</td>
+          <td>
+            <div class="product-name">${escapeHtml(r.product_name)}</div>
+            ${r.department_name ? `<div class="product-dept">${escapeHtml(r.department_name)}</div>` : ""}
+          </td>
+          <td>${money(r.price_cents)}${r.list_price_cents ? `<div class="product-dept">was ${money(r.list_price_cents)}</div>` : ""}</td>
+          <td>${discountBadge([r])}</td>
+          <td>${r.store_address ? `<a class="store-address-link" target="_blank" rel="noopener" href="${mapsLink(r.store_address)}">${escapeHtml(r.store_address)}</a>` : ""}</td>
+          <td>${escapeHtml(r.retailer_store_id || "")}${r.aisle ? `<div class="product-dept">Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}</div>` : ""}</td>
+          <td>${stockText ? `<span class="stock-dot ${stockClass}"></span>${escapeHtml(stockText)}` : ""}</td>
+          <td>${relTime(r.created_at)}</td>
+          <td class="action-col">
+            <button class="row-save-btn" data-deal="${r.deal_id}">Save</button>
+            <button class="secondary row-bought-btn" data-deal="${r.deal_id}">Bought</button>
+            <button class="secondary row-dismiss-btn" data-deal="${r.deal_id}">Dismiss</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  body.innerHTML = `
+    <h2>${escapeHtml(first.product_name)}</h2>
+    <p class="meta">SKU ${escapeHtml(first.retailer_product_id)}</p>
+    <div class="table-wrap">
+      <table class="detail-table">
+        <thead>
+          <tr>
+            <th>Image</th><th>Product</th><th>Price</th><th>Discount</th>
+            <th>Address</th><th>Store</th><th>Stock</th><th>Added</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody>${detailRows}</tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="modal-share-btn">Share Link</button>
+    </div>
+  `;
+
+  $("#modal-share-btn").addEventListener("click", () => shareProductLink(productId));
+  body.querySelectorAll(".row-save-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await api(`/api/deals/${btn.dataset.deal}/save`, { method: "POST" });
+      closeModal();
+      refreshActiveTab();
+    })
+  );
+  body.querySelectorAll(".row-bought-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await api(`/api/deals/${btn.dataset.deal}/bought`, { method: "POST" });
+      closeModal();
+      refreshActiveTab();
+    })
+  );
+  body.querySelectorAll(".row-dismiss-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await api(`/api/deals/${btn.dataset.deal}/dismiss`, { method: "POST" });
+      closeModal();
+      refreshActiveTab();
+    })
+  );
+  $("#deal-modal").classList.remove("hidden");
+}
+
+async function loadShoppingList() {
+  const rows = await api("/api/deals?status=saved&sort=recent");
+  const container = $("#shopping-list-content");
+  container.innerHTML = "";
+
+  if (rows.length === 0) {
+    container.innerHTML = `<p class="meta">Nothing saved yet — use "Save" on a deal to add it here.</p>`;
+    return;
+  }
+
+  const byStore = new Map();
+  for (const r of rows) {
+    const key = r.store_id;
+    if (!byStore.has(key)) byStore.set(key, { name: r.store_name, address: r.store_address, sections: new Map() });
+    const store = byStore.get(key);
+    const sectionKey = r.department_name || "Other";
+    if (!store.sections.has(sectionKey)) store.sections.set(sectionKey, []);
+    store.sections.get(sectionKey).push(r);
+  }
+
+  for (const [, store] of byStore) {
+    const groupEl = document.createElement("div");
+    groupEl.className = "shopping-store-group";
+    let html = `<h3>${escapeHtml(store.name || "Store")}</h3>`;
+    if (store.address) {
+      html += `<a class="store-address-link" target="_blank" rel="noopener" href="${mapsLink(store.address)}">${escapeHtml(store.address)}</a>`;
+    }
+    for (const [section, items] of store.sections) {
+      html += `<div class="shopping-section"><h4>${escapeHtml(section)}${items[0].aisle ? ` · Aisle ${escapeHtml(items[0].aisle)}` : ""}</h4>`;
+      for (const item of items) {
+        html += `
+          <div class="shopping-item">
+            ${item.image_url ? `<img class="thumb" src="${item.image_url}" alt="">` : ""}
+            <div class="name">${escapeHtml(item.product_name)}</div>
+            <div class="price">${money(item.price_cents)}</div>
+            <button class="secondary shopping-bought-btn" data-deal="${item.deal_id}">Bought</button>
+            <button class="secondary shopping-remove-btn" data-deal="${item.deal_id}">Remove</button>
+          </div>
+        `;
+      }
+      html += `</div>`;
+    }
+    groupEl.innerHTML = html;
+    container.appendChild(groupEl);
+  }
+
+  container.querySelectorAll(".shopping-bought-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await api(`/api/deals/${btn.dataset.deal}/bought`, { method: "POST" });
+      loadShoppingList();
+    })
+  );
+  container.querySelectorAll(".shopping-remove-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await api(`/api/deals/${btn.dataset.deal}/dismiss`, { method: "POST" });
+      loadShoppingList();
+    })
+  );
 }
 
 async function loadHistory() {
@@ -202,6 +434,7 @@ function closeBrowserFrame() {
 function refreshActiveTab() {
   const active = $(".tab-btn.active").dataset.tab;
   if (active === "deals") loadDeals();
+  if (active === "shopping") loadShoppingList();
   if (active === "history") loadHistory();
   if (active === "settings") loadSettings();
   if (active === "logs") loadLogs();
@@ -250,6 +483,14 @@ async function main() {
   await loadFilterOptions();
   await loadDeals();
   await refreshScanStatus();
+
+  // A "Share Link" deep link (?product=123) opens straight to that item's
+  // detail modal instead of just landing on the unfiltered table.
+  const sharedProductId = Number(new URLSearchParams(location.search).get("product"));
+  if (sharedProductId && window._dealGroups?.has(sharedProductId)) {
+    openProductDetail(sharedProductId);
+  }
+
   setInterval(refreshScanStatus, 15000);
   setInterval(() => {
     if ($(".tab-btn.active").dataset.tab === "deals") loadDeals();

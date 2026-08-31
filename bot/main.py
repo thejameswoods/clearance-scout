@@ -132,6 +132,45 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text(f"Alerts {'paused' if state['paused'] else 'resumed'}.")
 
 
+async def shoppinglist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.name, po.price_cents, s.name AS store_name,
+                   dept.name AS department_name, spl.aisle
+            FROM deal d
+            JOIN price_observation po ON po.id = d.latest_observation_id
+            JOIN product p ON p.id = d.product_id
+            JOIN store s ON s.id = d.store_id
+            LEFT JOIN department dept ON dept.id = p.department_id
+            LEFT JOIN store_product_location spl ON spl.product_id = p.id AND spl.store_id = s.id
+            WHERE d.status = 'saved'
+            ORDER BY s.name, dept.name NULLS LAST, p.name
+            """
+        ).fetchall()
+
+    if not rows:
+        await update.message.reply_text("Shopping list is empty — save a deal from the dashboard to add it here.")
+        return
+
+    lines = []
+    current_store = None
+    current_section = None
+    for row in rows:
+        if row["store_name"] != current_store:
+            current_store = row["store_name"]
+            current_section = None
+            lines.append(f"\n📍 <b>{current_store}</b>")
+        section = row["department_name"] or "Other"
+        aisle = f" (Aisle {row['aisle']})" if row["aisle"] else ""
+        if section != current_section:
+            current_section = section
+            lines.append(f"  <i>{section}{aisle}</i>")
+        lines.append(f"  • {row['name']} — {money(row['price_cents'])}")
+
+    await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")
+
+
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     department = context.args[0] if context.args else None
     try:
@@ -195,6 +234,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("scan", scan_command))
+    app.add_handler(CommandHandler("shoppinglist", shoppinglist_command))
     app.add_handler(CallbackQueryHandler(menu_callback))
     app.job_queue.run_repeating(poll_and_alert, interval=POLL_INTERVAL_SECONDS, first=10)
     logger.info("Bot starting (long-polling, no inbound webhook)")

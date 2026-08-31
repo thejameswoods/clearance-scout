@@ -84,3 +84,18 @@ def effective_price(pricing: dict[str, Any], is_clearance: bool) -> tuple[float,
         return clearance_value, reference
 
     return value, reference
+
+
+def stock_quantity(raw_product: dict[str, Any]) -> int | None:
+    """Pickup-location inventory count, if the item is actually in stock
+    there -- same fulfillment traversal as _is_advertised, pulling
+    `quantity` instead of just checking `isInStock`."""
+    for option in raw_product.get("fulfillment", {}).get("fulfillmentOptions", []) or []:
+        if option.get("type") != "pickup":
+            continue
+        for service in option.get("services", []) or []:
+            for location in service.get("locations", []) or []:
+                inventory = location.get("inventory") or {}
+                if inventory.get("isInStock"):
+                    return inventory.get("quantity")
+    return None

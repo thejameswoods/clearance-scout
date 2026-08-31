@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from adapters.base import Department, PriceObservation, ProductRef, StoreInfo
-from adapters.home_depot.clearance import detect_clearance, effective_price
+from adapters.home_depot.clearance import detect_clearance, effective_price, stock_quantity
 from adapters.home_depot.penny import detect_penny
 
 
@@ -100,6 +100,32 @@ def test_effective_price_passthrough_when_not_clearance():
     price, reference = effective_price(pricing, is_clearance=False)
     assert price == 24.99
     assert reference is None
+
+
+def test_stock_quantity_from_pickup_location():
+    raw = {
+        "fulfillment": {
+            "fulfillmentOptions": [
+                {"type": "pickup", "fulfillable": True, "services": [
+                    {"type": "bopis", "locations": [{"inventory": {"isInStock": True, "quantity": 5}, "locationId": "4403"}]},
+                ]},
+            ]
+        }
+    }
+    assert stock_quantity(raw) == 5
+
+
+def test_stock_quantity_none_when_not_in_stock_anywhere():
+    raw = {
+        "fulfillment": {
+            "fulfillmentOptions": [
+                {"type": "pickup", "fulfillable": False, "services": [
+                    {"type": "bopis", "locations": [{"inventory": {"isInStock": False, "quantity": 0}, "locationId": "4403"}]},
+                ]},
+            ]
+        }
+    }
+    assert stock_quantity(raw) is None
 
 
 def _observation(price_cents: int, fulfillment_state: str | None) -> PriceObservation:

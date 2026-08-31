@@ -133,6 +133,7 @@ def finish_scan_run(conn, scan_run_id: int, status: str, products_checked: int, 
 def insert_price_observation(conn, product_id: int, store_id: int, scan_run_id: int | None,
                               observed_at: datetime, price_cents: int, list_price_cents: int | None,
                               is_clearance: bool, is_penny: bool, fulfillment_state: str | None,
+                              stock_quantity: int | None,
                               raw_signal: dict[str, Any]) -> int:
     import json
 
@@ -140,12 +141,12 @@ def insert_price_observation(conn, product_id: int, store_id: int, scan_run_id: 
         """
         INSERT INTO price_observation
             (product_id, store_id, scan_run_id, observed_at, price_cents, list_price_cents,
-             is_clearance, is_penny, fulfillment_state, raw_signal)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             is_clearance, is_penny, fulfillment_state, stock_quantity, raw_signal)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (product_id, store_id, scan_run_id, observed_at, price_cents, list_price_cents,
-         is_clearance, is_penny, fulfillment_state, json.dumps(raw_signal)),
+         is_clearance, is_penny, fulfillment_state, stock_quantity, json.dumps(raw_signal)),
     ).fetchone()
     return row["id"]
 
@@ -173,7 +174,7 @@ def upsert_deal_from_observation(conn, product_id: int, store_id: int, observati
         conn.execute(
             """
             UPDATE deal SET latest_observation_id = %s, updated_at = now(),
-                status = CASE WHEN status IN ('bought', 'dismissed') THEN status
+                status = CASE WHEN status IN ('bought', 'dismissed', 'saved') THEN status
                               WHEN status = 'stale' THEN 'active' ELSE status END
             WHERE id = %s
             """,

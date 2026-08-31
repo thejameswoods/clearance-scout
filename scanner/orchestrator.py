@@ -99,7 +99,7 @@ def run_scan(
         db.finish_scan_run(conn, scan_run_id, "completed", 0, 0)
 
         for department in departments:
-            db.upsert_department(
+            department_id = db.upsert_department(
                 conn, retailer_id, department.retailer_department_id, department.name,
                 parent_department_id=None,  # resolved lazily; parent linkage is a nice-to-have, not load-bearing
             )
@@ -132,7 +132,7 @@ def run_scan(
 
                 product_id = db.upsert_product(
                     conn, retailer_id, product_ref.retailer_product_id, product_ref.name,
-                    department_id=None, upc=product_ref.upc, image_url=product_ref.image_url,
+                    department_id=department_id, upc=product_ref.upc, image_url=product_ref.image_url,
                 )
                 db.upsert_store_product_location(conn, product_id, store_id, observation.aisle, observation.bay)
 
@@ -140,7 +140,7 @@ def run_scan(
                     conn, product_id, store_id, scan_run_id, observation.observed_at,
                     observation.price_cents, observation.list_price_cents,
                     observation.is_clearance, observation.is_penny,
-                    observation.fulfillment_state, observation.raw_signal,
+                    observation.fulfillment_state, observation.stock_quantity, observation.raw_signal,
                 )
                 _, is_new = db.upsert_deal_from_observation(
                     conn, product_id, store_id, observation_id,
