@@ -10,13 +10,24 @@ mediaPriceInventory response's `products[]` array:
 
 Two independent signals, both derived from that shape, no separate "badge"
 field:
-- Clearance at all: `pricing.clearance` is non-null with a `.value`.
 - "Advertised" (yellow tag, vs. an unadvertised/quiet markdown): the
   product has BOPIS (buy-online-pickup-in-store) as a fulfillment option
   but pickup currently isn't fulfillable there -- HDScanner's own
   reasoning is that in-store-only clearance markdowns get pulled from
   online reservation. Kept as a pure function over the fulfillment shape
   so it's unit-testable without a browser.
+- Clearance at all: `pricing.clearance` is non-null with a `.value`, AND
+  either (a) the product is advertised (see above -- that fulfillment
+  signal is itself independent confirmation of a real in-store markdown,
+  confirmed live 2026-08-31 on SKUs 331978757 and 304093235: both had
+  `pricing.value` still showing the pre-markdown price even though the
+  clearance was genuinely live -- Home Depot's own API just doesn't always
+  surface the in-store price online), or (b) the charged price
+  (`pricing.value`) actually matches `clearance.value` directly. Without
+  the advertised signal, a clearance object alone isn't enough -- confirmed
+  live 2026-08-31, SKU 303289146: a non-null `pricing.clearance` that was
+  stale/inapplicable (pickup still fulfillable, no BOPIS pulled), where
+  the item's own product page showed no clearance tag at all.
 """
 
 from __future__ import annotations
@@ -40,9 +51,36 @@ def _is_advertised(raw_product: dict[str, Any]) -> bool:
 
 
 def detect_clearance(raw_response: dict[str, Any]) -> ClearanceSignal | None:
-    clearance = raw_response.get("pricing", {}).get("clearance")
+    pricing = raw_response.get("pricing", {})
+    clearance = pricing.get("clearance")
     if not clearance or clearance.get("value") is None:
         return None
 
-    reason = "advertised_yellow_tag" if _is_advertised(raw_response) else "unadvertised_clearance"
+    advertised = _is_advertised(raw_response)
+    if not advertised:
+        charged_price = pricing.get("value")
+        if charged_price is None or round(charged_price, 2) != round(clearance["value"], 2):
+            return None
+
+    reason = "advertised_yellow_tag" if advertised else "unadvertised_clearance"
     return ClearanceSignal(is_clearance=True, reason=reason)
+
+
+def effective_price(pricing: dict[str, Any], is_clearance: bool) -> tuple[float, float | None]:
+    """What's actually charged, and the "was" price to show a discount
+    against (or None if there isn't one). Confirmed live 2026-08-31 (SKUs
+    331978757, 304093235): when clearance is confirmed advertised,
+    `pricing.value` can still be the pre-markdown price, not what's
+    actually charged in-store -- use `clearance.value` instead, and treat
+    the old `pricing.value` as the reference/"was" price."""
+    value = pricing.get("value")
+    clearance = pricing.get("clearance") or {}
+    clearance_value = clearance.get("value")
+    reference = pricing.get("original")
+
+    if is_clearance and clearance_value is not None:
+        if reference is None and value is not None and round(value, 2) != round(clearance_value, 2):
+            reference = value
+        return clearance_value, reference
+
+    return value, reference

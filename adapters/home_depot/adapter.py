@@ -14,6 +14,7 @@ from ..base import (
 )
 from .api_client import HomeDepotApiClient
 from .clearance import detect_clearance as _detect_clearance
+from .clearance import effective_price as _effective_price
 from .departments import discover_departments as _discover_departments
 from .penny import detect_penny as _detect_penny
 
@@ -169,15 +170,18 @@ class HomeDepotAdapter(RetailerAdapter):
                 f"at store {store.retailer_store_id}"
             )
 
+        is_clearance = bool(clearance_signal and clearance_signal.is_clearance)
+        charged_price, reference_price = _effective_price(pricing, is_clearance)
+
         observation = PriceObservation(
             product_ref=product_ref,
             store=store,
             observed_at=datetime.now(timezone.utc),
-            price_cents=int(round(float(pricing["value"]) * 100)),
+            price_cents=int(round(float(charged_price) * 100)),
             list_price_cents=(
-                int(round(float(pricing["original"]) * 100)) if pricing.get("original") else None
+                int(round(float(reference_price) * 100)) if reference_price else None
             ),
-            is_clearance=bool(clearance_signal and clearance_signal.is_clearance),
+            is_clearance=is_clearance,
             fulfillment_state=fulfillment_state,
             aisle=aisle,
             bay=bay,
