@@ -237,13 +237,23 @@ class HomeDepotAdapter(RetailerAdapter):
 
         store_sku_id = identifiers.get("storeSkuNumber")
         aisle = bay = None
-        if store_sku_id:
+        if not store_sku_id:
+            # Silent before this fix -- confirmed live 2026-08-31 a real
+            # hit (204724933) came through with no aisle/bay and nothing
+            # in the logs explaining why, because this branch had no log
+            # line at all. Now it's explicit whether it's "HD didn't give
+            # us a storeSkuNumber for this item" vs. the except-branch
+            # below ("we had one but the aislebay call itself failed").
+            logger.info("No storeSkuNumber for %s -- skipping aisle/bay lookup", product_ref.retailer_product_id)
+        else:
             try:
                 ab = client.aislebay(store.retailer_store_id, [store_sku_id])
                 store_skus = ((ab.get("data") or {}).get("aislebay") or {}).get("storeSkus") or []
                 if store_skus:
                     info = store_skus[0].get("aisleBayInfo") or {}
                     aisle, bay = info.get("aisle"), info.get("bay")
+                else:
+                    logger.info("aislebay returned no data for storeSkuId %s", store_sku_id)
             except Exception:
                 logger.exception("aislebay enrichment failed for storeSkuId %s", store_sku_id)
 
