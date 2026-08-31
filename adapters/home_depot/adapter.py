@@ -157,6 +157,18 @@ class HomeDepotAdapter(RetailerAdapter):
         pricing = raw.get("pricing") or {}
         fulfillment_state = self._pickup_fulfillment_state(raw)
 
+        # Confirmed live 2026-08-31: pricing.value comes back null for some
+        # real items at a given store (not delisted -- media_price_inventory
+        # still returns the item, just with no price at this location, e.g.
+        # special-order-only or a genuinely unpriced SKU). Same posture as
+        # the "no data" case above: a clear, single-line error the
+        # orchestrator already catches per-item, not a bare TypeError.
+        if pricing.get("value") is None:
+            raise RuntimeError(
+                f"Home Depot returned no price for item {product_ref.retailer_product_id} "
+                f"at store {store.retailer_store_id}"
+            )
+
         observation = PriceObservation(
             product_ref=product_ref,
             store=store,
