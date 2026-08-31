@@ -90,6 +90,14 @@ def run_scan(
     db.set_credential_session_status(conn, retailer_id, "valid")
 
     stores = list(adapter.find_stores(browser_ctx, zip_code, radius_miles))
+    # Progress logging below is deliberately checkpoint-based (store,
+    # department, and a periodic heartbeat during price checks), not
+    # per-item -- confirmed live 2026-08-31 the orchestrator previously
+    # logged nothing at all on the success path, only on failures, which
+    # left the dashboard's Logs tab empty for the entire length of a scan.
+    # Per-item logging would also blow past the scanner's 500-line ring
+    # buffer (scanner/log_buffer.py) well before a real scan finishes.
+    logger.info("%s: found %d store(s) within %s miles of %s", adapter.retailer_slug, len(stores), radius_miles, zip_code)
 
     stores_scanned = 0
     departments_scanned = 0
@@ -105,11 +113,16 @@ def run_scan(
             store_info.name, store_info.address,
         )
         stores_scanned += 1
+        logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
 
         scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "departments", trigger)
         all_departments = list(adapter.discover_departments(browser_ctx))
         departments = _select_departments(all_departments, watched_departments, department_filter)
         db.finish_scan_run(conn, scan_run_id, "completed", 0, 0)
+        logger.info(
+            "Store %s: %d department(s) discovered, %d match the watch list",
+            store_info.retailer_store_id, len(all_departments), len(departments),
+        )
 
         for department in departments:
             department_id = db.upsert_department(
@@ -143,9 +156,16 @@ def run_scan(
                 db.mark_department_products_listed(conn, department_id)
             product_refs = [p for p in all_product_refs if _matches_any(p.name, watch_keywords)]
             db.finish_scan_run(conn, scan_run_id, "completed", len(product_refs), 0)
+            logger.info(
+                "Department %r: %d product(s) to check (%s)",
+                department.name, len(product_refs),
+                "from cache" if cache_is_fresh else "freshly listed",
+            )
 
             scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "prices", trigger)
-            for product_ref in product_refs:
+            department_hits = 0
+            department_errors = 0
+            for i, product_ref in enumerate(product_refs, start=1):
                 limiter.wait_before_next_request()
                 try:
                     observation = adapter.check_price(browser_ctx, product_ref, store_info)
@@ -153,10 +173,12 @@ def run_scan(
                 except PermissionError:
                     limiter.record_403()
                     errors_count += 1
+                    department_errors += 1
                     continue
                 except Exception:
                     logger.exception("Failed checking price for %s", product_ref.retailer_product_id)
                     errors_count += 1
+                    department_errors += 1
                     continue
 
                 product_id = db.upsert_product(
@@ -179,10 +201,27 @@ def run_scan(
                 )
                 if is_new:
                     new_deal_ids.append(product_id)
+                if observation.is_clearance or observation.is_penny:
+                    department_hits += 1
+                    logger.info(
+                        "%s Found: %s at $%.2f%s",
+                        "\U0001f7e1" if observation.is_clearance else "\U0001fa99",
+                        product_ref.name, observation.price_cents / 100,
+                        " (new)" if is_new else "",
+                    )
 
                 products_checked += 1
 
+                # Heartbeat every 10 items so a long department still shows
+                # live progress, not just a start/end log line.
+                if i % 10 == 0 and i != len(product_refs):
+                    logger.info("Department %r: checked %d/%d so far", department.name, i, len(product_refs))
+
             db.finish_scan_run(conn, scan_run_id, "completed", products_checked, errors_count)
+            logger.info(
+                "Department %r: done -- %d checked, %d hit(s), %d error(s)",
+                department.name, len(product_refs), department_hits, department_errors,
+            )
 
     return {
         "stores_scanned": stores_scanned,
