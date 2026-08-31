@@ -40,6 +40,7 @@ CREATE TABLE product (
     name                  TEXT NOT NULL,
     department_id         INTEGER REFERENCES department(id) ON DELETE SET NULL,
     image_url             TEXT,
+    canonical_url         TEXT,
     first_seen_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (retailer_id, retailer_product_id)

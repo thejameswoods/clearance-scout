@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -12,12 +13,14 @@ from ..base import (
     RetailerAdapter,
     StoreInfo,
 )
-from .api_client import HomeDepotApiClient
+from .api_client import HOME_URL, HomeDepotApiClient
 from .clearance import detect_clearance as _detect_clearance
 from .clearance import effective_price as _effective_price
 from .clearance import stock_quantity as _stock_quantity
 from .departments import discover_departments as _discover_departments
 from .penny import detect_penny as _detect_penny
+
+logger = logging.getLogger("clearance_scout.adapters.home_depot")
 
 # HDScanner's own validated pagination limits for category listing (see
 # api_client.py's module docstring for how these were confirmed).
@@ -155,7 +158,6 @@ class HomeDepotAdapter(RetailerAdapter):
         raw = products[0]
 
         clearance_signal = self.detect_clearance(raw)
-        aisle, bay = self.location_hint(browser_ctx, product_ref, store)
         pricing = raw.get("pricing") or {}
         fulfillment_state = self._pickup_fulfillment_state(raw)
 
@@ -185,16 +187,61 @@ class HomeDepotAdapter(RetailerAdapter):
             is_clearance=is_clearance,
             fulfillment_state=fulfillment_state,
             stock_quantity=_stock_quantity(raw),
-            aisle=aisle,
-            bay=bay,
             raw_signal=raw,
         )
         # is_penny depends on the fully-built observation (price + fulfillment
         # state together), so it's computed after construction and the
         # dataclass is frozen — rebuild with the flag set.
-        return PriceObservation(
+        observation = PriceObservation(
             **{**observation.__dict__, "is_penny": self.detect_penny(observation)}
         )
+
+        # Aisle/bay + canonical URL + image each cost an extra API call
+        # (product_detail, then aislebay) -- only worth paying for a
+        # confirmed hit, not every product checked. Matches HDScanner's own
+        # behavior (its background.js only calls its equivalent enrichment
+        # on items that already passed the clearance/penny filter, not the
+        # full checked set).
+        if observation.is_clearance or observation.is_penny:
+            aisle, bay, canonical_url, image_url = self._enrich_confirmed_hit(client, product_ref, store)
+            observation = PriceObservation(
+                **{**observation.__dict__, "aisle": aisle, "bay": bay,
+                   "canonical_url": canonical_url, "image_url": image_url}
+            )
+
+        return observation
+
+    def _enrich_confirmed_hit(
+        self, client: HomeDepotApiClient, product_ref: ProductRef, store: StoreInfo
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        try:
+            detail = client.product_detail(store.retailer_store_id, product_ref.retailer_product_id)
+        except Exception:
+            logger.exception("product_detail enrichment failed for %s", product_ref.retailer_product_id)
+            return (None, None, None, None)
+
+        product = (detail.get("data") or {}).get("product") or {}
+        identifiers = product.get("identifiers") or {}
+        canonical_url = identifiers.get("canonicalUrl")
+        if canonical_url and not canonical_url.startswith("http"):
+            canonical_url = f"{HOME_URL.rstrip('/')}{canonical_url}"
+
+        images = (product.get("media") or {}).get("images") or []
+        image_url = images[0].get("url") if images else None
+
+        store_sku_id = identifiers.get("storeSkuNumber")
+        aisle = bay = None
+        if store_sku_id:
+            try:
+                ab = client.aislebay(store.retailer_store_id, [store_sku_id])
+                store_skus = ((ab.get("data") or {}).get("aislebay") or {}).get("storeSkus") or []
+                if store_skus:
+                    info = store_skus[0].get("aisleBayInfo") or {}
+                    aisle, bay = info.get("aisle"), info.get("bay")
+            except Exception:
+                logger.exception("aislebay enrichment failed for storeSkuId %s", store_sku_id)
+
+        return (aisle, bay, canonical_url, image_url)
 
     def detect_clearance(self, raw_response: dict[str, Any]):
         return _detect_clearance(raw_response)
@@ -202,15 +249,12 @@ class HomeDepotAdapter(RetailerAdapter):
     def detect_penny(self, observation: PriceObservation) -> bool:
         return _detect_penny(observation)
 
-    def location_hint(
-        self, browser_ctx: Any, product_ref: ProductRef, store: StoreInfo
-    ) -> tuple[str | None, str | None]:
-        # A real `aislebay` GraphQL query exists (confirmed alongside
-        # everything else in api_client.py's module docstring) but takes
-        # storeSkuIds, a different ID namespace than the itemIds used
-        # everywhere else here -- wiring it in is a real follow-up, not
-        # done now to keep this change reviewable.
-        return (None, None)
+    # No location_hint() override: aisle/bay is wired in directly in
+    # check_price via _enrich_confirmed_hit instead of this base-class hook.
+    # The real `aislebay` query needs a storeSkuId (from product_detail's
+    # identifiers.storeSkuNumber), not the itemId location_hint() is handed
+    # -- and it's only worth fetching for a confirmed hit anyway, which
+    # check_price already knows and this standalone hook wouldn't.
 
     def rate_limit_policy(self) -> RateLimitPolicy:
         # Confirmed real values (not a guess from HDScanner's README

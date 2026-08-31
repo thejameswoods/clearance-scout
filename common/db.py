@@ -97,17 +97,25 @@ def list_cached_products_for_department(conn, department_id: int) -> list[dict[s
 
 
 def upsert_product(conn, retailer_id: int, retailer_product_id: str, name: str,
-                    department_id: int | None, upc: str | None, image_url: str | None) -> int:
+                    department_id: int | None, upc: str | None, image_url: str | None,
+                    canonical_url: str | None = None) -> int:
+    # image_url/canonical_url arrive as None on most calls (only known once
+    # a clearance/penny hit triggers enrichment -- see
+    # adapters/home_depot/adapter.py's _enrich_confirmed_hit) -- COALESCE
+    # keeps whatever was already learned rather than overwriting it with
+    # NULL on every subsequent plain price check of the same product.
     row = conn.execute(
         """
-        INSERT INTO product (retailer_id, retailer_product_id, name, department_id, upc, image_url)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO product (retailer_id, retailer_product_id, name, department_id, upc, image_url, canonical_url)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (retailer_id, retailer_product_id) DO UPDATE SET
-            name = EXCLUDED.name, department_id = EXCLUDED.department_id,
-            upc = EXCLUDED.upc, image_url = EXCLUDED.image_url, last_seen_at = now()
+            name = EXCLUDED.name, department_id = EXCLUDED.department_id, upc = EXCLUDED.upc,
+            image_url = COALESCE(EXCLUDED.image_url, product.image_url),
+            canonical_url = COALESCE(EXCLUDED.canonical_url, product.canonical_url),
+            last_seen_at = now()
         RETURNING id
         """,
-        (retailer_id, retailer_product_id, name, department_id, upc, image_url),
+        (retailer_id, retailer_product_id, name, department_id, upc, image_url, canonical_url),
     ).fetchone()
     return row["id"]
 

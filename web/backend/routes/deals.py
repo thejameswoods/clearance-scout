@@ -14,6 +14,7 @@ def get_deals(
     retailer: str | None = None,
     store_id: int | None = None,
     department_id: int | None = None,
+    department_prefix: str | None = None,
     clearance_only: bool = False,
     penny_only: bool = False,
     min_discount_pct: float | None = None,
@@ -23,7 +24,8 @@ def get_deals(
     with db.get_connection() as conn:
         return queries.list_deals(
             conn, status=status, retailer_slug=retailer, store_id=store_id,
-            department_id=department_id, clearance_only=clearance_only,
+            department_id=department_id, department_prefix=department_prefix,
+            clearance_only=clearance_only,
             penny_only=penny_only, min_discount_pct=min_discount_pct,
             search=search, sort=sort,
         )

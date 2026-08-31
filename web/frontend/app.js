@@ -81,7 +81,8 @@ function dealCard(d) {
 async function loadDeals() {
   const params = new URLSearchParams();
   const search = $("#f-search").value.trim();
-  const dept = $("#f-department").value;
+  const rootSel = $("#f-department-root");
+  const leafSel = $("#f-department-leaf");
   const store = $("#f-store").value;
   const clearanceOnly = $("#f-clearance").checked;
   const pennyOnly = $("#f-penny").checked;
@@ -89,7 +90,16 @@ async function loadDeals() {
   const sort = $("#f-sort").value;
 
   if (search) params.set("search", search);
-  if (dept) params.set("department_id", dept);
+  // Cascading department filter: a specific leaf picked -> exact
+  // department_id match. Only a root picked (leaf left on "All in this
+  // department") -> department_prefix, matching the root itself plus
+  // every real sub-department under it (see build_department_hierarchy /
+  // list_deals's department_prefix handling).
+  if (leafSel.value) {
+    params.set("department_id", leafSel.value);
+  } else if (rootSel.value) {
+    params.set("department_prefix", rootSel.selectedOptions[0].textContent.trim());
+  }
   if (store) params.set("store_id", store);
   if (clearanceOnly) params.set("clearance_only", "true");
   if (pennyOnly) params.set("penny_only", "true");
@@ -171,6 +181,7 @@ function openProductDetail(productId) {
           <td>
             <div class="product-name">${escapeHtml(r.product_name)}</div>
             ${r.department_name ? `<div class="product-dept">${escapeHtml(r.department_name)}</div>` : ""}
+            ${r.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${r.canonical_url}">View item &rarr;</a>` : ""}
           </td>
           <td>${money(r.price_cents)}${r.list_price_cents ? `<div class="product-dept">was ${money(r.list_price_cents)}</div>` : ""}</td>
           <td>${discountBadge([r])}</td>
@@ -260,12 +271,17 @@ async function loadShoppingList() {
       html += `<a class="store-address-link" target="_blank" rel="noopener" href="${mapsLink(store.address)}">${escapeHtml(store.address)}</a>`;
     }
     for (const [section, items] of store.sections) {
-      html += `<div class="shopping-section"><h4>${escapeHtml(section)}${items[0].aisle ? ` · Aisle ${escapeHtml(items[0].aisle)}` : ""}</h4>`;
+      html += `<div class="shopping-section"><h4>${escapeHtml(section)}</h4>`;
       for (const item of items) {
+        const aisleText = item.aisle ? `Aisle ${escapeHtml(item.aisle)}${item.bay ? "/" + escapeHtml(item.bay) : ""}` : "";
         html += `
           <div class="shopping-item">
             ${item.image_url ? `<img class="thumb" src="${item.image_url}" alt="">` : ""}
-            <div class="name">${escapeHtml(item.product_name)}</div>
+            <div class="name">
+              ${escapeHtml(item.product_name)}
+              ${aisleText ? `<div class="product-dept">${aisleText}</div>` : ""}
+              ${item.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${item.canonical_url}">View item &rarr;</a>` : ""}
+            </div>
             <div class="price">${money(item.price_cents)}</div>
             <button class="secondary shopping-bought-btn" data-deal="${item.deal_id}">Bought</button>
             <button class="secondary shopping-remove-btn" data-deal="${item.deal_id}">Remove</button>
@@ -339,23 +355,57 @@ function closeModal() {
   $("#deal-modal").classList.add("hidden");
 }
 
+// Populates the second ("leaf") department select with everything under
+// the chosen root -- the hierarchy endpoint returns a parent-before-
+// children (DFS) order, so a root's full subtree is just "every row after
+// it, up to the next depth-0 row." Relative depth (dep.depth - rootDepth)
+// keeps the leaf select's own indentation sane regardless of how deep the
+// root itself was (always 0 for a true root, but this stays correct if
+// that ever changes).
+function populateDepartmentLeafOptions(rootId) {
+  const leafSel = $("#f-department-leaf");
+  leafSel.innerHTML = `<option value="">All in this department</option>`;
+  if (!rootId) {
+    leafSel.hidden = true;
+    return;
+  }
+  const all = window._departmentHierarchy || [];
+  const rootIndex = all.findIndex((d) => String(d.id) === String(rootId));
+  if (rootIndex === -1) return;
+  const rootDepth = all[rootIndex].depth || 0;
+  for (let i = rootIndex + 1; i < all.length && (all[i].depth || 0) > rootDepth; i++) {
+    const dep = all[i];
+    const opt = document.createElement("option");
+    opt.value = dep.id;
+    opt.textContent = "\u00A0\u00A0\u00A0\u00A0".repeat((dep.depth || 0) - rootDepth - 1) + (dep.label || dep.name);
+    opt.title = dep.name;
+    leafSel.appendChild(opt);
+  }
+  leafSel.hidden = false;
+}
+
 async function loadFilterOptions() {
   const [departments, stores] = await Promise.all([
     api("/api/settings/departments"),
     api("/api/settings/stores"),
   ]);
-  const deptSel = $("#f-department");
-  departments.forEach((dep) => {
-    const opt = document.createElement("option");
-    opt.value = dep.id;
-    // Backend reconstructs hierarchy from Home Depot's flattened breadcrumb
-    // names (see build_department_hierarchy) -- indent by depth and show
-    // only the new part of the name at each level, so "Electrical > Doorbells
-    // > Bell Wire" reads as a tree instead of three copies of "Electrical".
-    opt.textContent = "    ".repeat(dep.depth || 0) + (dep.label || dep.name);
-    opt.title = dep.name;
-    deptSel.appendChild(opt);
+  window._departmentHierarchy = departments;
+
+  const rootSel = $("#f-department-root");
+  departments
+    .filter((dep) => (dep.depth || 0) === 0)
+    .forEach((dep) => {
+      const opt = document.createElement("option");
+      opt.value = dep.id;
+      opt.textContent = dep.label || dep.name;
+      rootSel.appendChild(opt);
+    });
+  rootSel.addEventListener("change", () => {
+    populateDepartmentLeafOptions(rootSel.value);
+    loadDeals();
   });
+  $("#f-department-leaf").addEventListener("change", loadDeals);
+
   const storeSel = $("#f-store");
   stores.forEach((s) => {
     const opt = document.createElement("option");
@@ -482,7 +532,10 @@ function setupTabs() {
 }
 
 function setupFilters() {
-  ["#f-search", "#f-department", "#f-store", "#f-clearance", "#f-penny", "#f-min-discount", "#f-sort"].forEach(
+  // #f-department-root / #f-department-leaf get their own listeners in
+  // loadFilterOptions() (the leaf select also needs to repopulate when the
+  // root changes, not just trigger a reload).
+  ["#f-search", "#f-store", "#f-clearance", "#f-penny", "#f-min-discount", "#f-sort"].forEach(
     (sel) => $(sel).addEventListener("change", loadDeals)
   );
   $("#f-search").addEventListener("input", () => {

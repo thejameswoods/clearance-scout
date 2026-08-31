@@ -14,6 +14,7 @@ def list_deals(
     retailer_slug: str | None = None,
     store_id: int | None = None,
     department_id: int | None = None,
+    department_prefix: str | None = None,
     clearance_only: bool = False,
     penny_only: bool = False,
     min_discount_pct: float | None = None,
@@ -38,6 +39,16 @@ def list_deals(
     if department_id:
         clauses.append("p.department_id = %s")
         params.append(department_id)
+    elif department_prefix:
+        # "All departments under <root>" (the cascading department filter's
+        # top-level-only case) -- Home Depot's department names are a real
+        # breadcrumb (see build_department_hierarchy), so a child's full
+        # name always starts with its parent's, word-boundary safe via
+        # starts_with(name, prefix + " ") rather than a raw LIKE (no
+        # wildcard-escaping footgun for a department name containing % or _).
+        clauses.append("(dept.name = %s OR starts_with(dept.name, %s))")
+        params.append(department_prefix)
+        params.append(department_prefix + " ")
     if search:
         clauses.append("p.name ILIKE %s")
         params.append(f"%{search}%")
@@ -54,7 +65,7 @@ def list_deals(
         SELECT
             d.id AS deal_id, d.status, d.created_at, d.updated_at,
             p.id AS product_id, p.retailer_product_id, p.name AS product_name,
-            p.image_url, p.department_id, dept.name AS department_name,
+            p.image_url, p.canonical_url, p.department_id, dept.name AS department_name,
             s.id AS store_id, s.name AS store_name, s.address AS store_address,
             s.retailer_store_id,
             r.slug AS retailer_slug, r.display_name AS retailer_name,

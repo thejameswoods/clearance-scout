@@ -75,6 +75,8 @@ class PriceObservation:
     stock_quantity: int | None = None
     aisle: str | None = None
     bay: str | None = None
+    canonical_url: str | None = None
+    image_url: str | None = None
     raw_signal: dict[str, Any] = field(default_factory=dict)
 
 

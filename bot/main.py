@@ -137,7 +137,7 @@ async def shoppinglist_command(update: Update, context: ContextTypes.DEFAULT_TYP
         rows = conn.execute(
             """
             SELECT p.name, po.price_cents, s.name AS store_name,
-                   dept.name AS department_name, spl.aisle
+                   dept.name AS department_name, spl.aisle, spl.bay
             FROM deal d
             JOIN price_observation po ON po.id = d.latest_observation_id
             JOIN product p ON p.id = d.product_id
@@ -162,11 +162,13 @@ async def shoppinglist_command(update: Update, context: ContextTypes.DEFAULT_TYP
             current_section = None
             lines.append(f"\n📍 <b>{current_store}</b>")
         section = row["department_name"] or "Other"
-        aisle = f" (Aisle {row['aisle']})" if row["aisle"] else ""
         if section != current_section:
             current_section = section
-            lines.append(f"  <i>{section}{aisle}</i>")
-        lines.append(f"  • {row['name']} — {money(row['price_cents'])}")
+            lines.append(f"  <i>{section}</i>")
+        aisle = ""
+        if row["aisle"]:
+            aisle = f" (Aisle {row['aisle']}{'/' + row['bay'] if row['bay'] else ''})"
+        lines.append(f"  • {row['name']} — {money(row['price_cents'])}{aisle}")
 
     await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")
 

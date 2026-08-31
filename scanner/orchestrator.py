@@ -161,7 +161,9 @@ def run_scan(
 
                 product_id = db.upsert_product(
                     conn, retailer_id, product_ref.retailer_product_id, product_ref.name,
-                    department_id=department_id, upc=product_ref.upc, image_url=product_ref.image_url,
+                    department_id=department_id, upc=product_ref.upc,
+                    image_url=observation.image_url or product_ref.image_url,
+                    canonical_url=observation.canonical_url,
                 )
                 db.upsert_store_product_location(conn, product_id, store_id, observation.aisle, observation.bay)
 

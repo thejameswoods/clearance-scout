@@ -115,12 +115,38 @@ query mediaPriceInventory($itemIds: [String!]!, $storeId: String!) {
 
 # Full product record (name, brand, canonical URL) -- only needed for
 # confirmed clearance/penny hits, not every product checked.
+#
+# `media { images { url } }` is an UNVERIFIED addition, unlike the rest of
+# this query -- HDScanner (the only confirmed source for this API's real
+# shape) doesn't request any image field anywhere in its own source, so
+# there's nothing to confirm this against. If the field name is wrong,
+# Home Depot's GraphQL API returns a normal, clear schema-validation error
+# (not a silent bad match) naming the real field if one exists -- confirm
+# on first real deploy and fix based on that error, same posture as
+# `identifiers.productLabel` in CATEGORY_QUERY above.
 PRODUCT_QUERY = """
 query productClientOnlyProduct($itemId: String!, $storeId: String!) {
   product(itemId: $itemId) {
     itemId
     identifiers { productLabel brandName canonicalUrl modelNumber storeSkuNumber }
     pricing(storeId: $storeId) { value original clearance { value dollarOff percentageOff } }
+    media { images { url } }
+  }
+}"""
+
+# Real, confirmed query (HDScanner's own `aislebay` field) -- separate from
+# `product.fulfillment`, takes storeSkuNumbers (not itemIds). Batchable up
+# to 20 SKUs/call (HDScanner's own chunk size); this adapter calls it with
+# a single SKU per confirmed hit, same "known inefficiency, not batched
+# here" posture as media_price_inventory (see check_price's docstring).
+AISLEBAY_QUERY = """
+query aislebay($storeId: String!, $storeSkuIds: [String!]!) {
+  aislebay(storeId: $storeId, storeSkuIds: $storeSkuIds) {
+    storeSkus {
+      storeNumber
+      storeSkuId
+      aisleBayInfo { aisle bay invLocDesc invLocDescFriendly }
+    }
   }
 }"""
 
@@ -222,4 +248,13 @@ class HomeDepotApiClient:
             "productClientOnlyProduct",
             {"itemId": item_id, "storeId": store_id},
             PRODUCT_QUERY,
+        )
+
+    def aislebay(self, store_id: str, store_sku_ids: list[str]) -> dict[str, Any]:
+        if len(store_sku_ids) > 20:
+            raise ValueError("aislebay: max 20 storeSkuIds per call (HDScanner's own chunk size)")
+        return self._graphql(
+            "aislebay",
+            {"storeId": store_id, "storeSkuIds": store_sku_ids},
+            AISLEBAY_QUERY,
         )
