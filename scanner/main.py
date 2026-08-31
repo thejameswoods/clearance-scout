@@ -79,6 +79,25 @@ def logs():
     return _log_buffer.records()
 
 
+@app.get("/config")
+def config():
+    # Read-only, non-secret runtime config -- feeds the dashboard's
+    # Settings tab so "what is this actually scanning right now" doesn't
+    # require SSHing in and reading .env by hand (confirmed real friction
+    # this session). Nothing here is a credential; TELEGRAM_BOT_TOKEN etc.
+    # never get exposed this way.
+    return {
+        "retailers": RETAILERS,
+        "zip_code": ZIP_CODE,
+        "radius_miles": RADIUS_MILES,
+        "watched_departments": WATCHED_DEPARTMENTS,
+        "watch_keywords": WATCH_KEYWORDS,
+        "scan_interval_minutes": SCAN_INTERVAL_MINUTES,
+        "scan_on_startup": SCAN_ON_STARTUP,
+        "product_list_cache_hours": PRODUCT_LIST_CACHE_HOURS,
+    }
+
+
 @app.post("/trigger-scan")
 def trigger_scan(department: str | None = None):
     global _trigger_department

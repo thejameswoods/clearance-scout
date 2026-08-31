@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+
+import httpx
 from fastapi import APIRouter
 
 from common import db
 from web.backend import queries
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+SCANNER_URL = os.environ.get("SCANNER_INTERNAL_URL", "http://scanner:8090")
 
 
 @router.get("/retailers")
@@ -36,3 +41,16 @@ def departments():
 def telegram_status():
     with db.get_connection() as conn:
         return queries.telegram_binding_status(conn)
+
+
+@router.get("/scan-config")
+def scan_config():
+    # Proxies the scanner's own /config -- same pattern as routes/logs.py
+    # and routes/scan.py's status proxy. Read-only, non-secret runtime
+    # config (ZIP/radius/watch filters/scan timing), not the .env file
+    # itself -- feeds the Settings tab so this doesn't require SSHing in.
+    try:
+        resp = httpx.get(f"{SCANNER_URL}/config", timeout=5)
+        return resp.json()
+    except httpx.HTTPError as exc:
+        return {"error": f"scanner unreachable: {exc}"}

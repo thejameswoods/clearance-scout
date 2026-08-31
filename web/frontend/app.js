@@ -416,11 +416,27 @@ async function loadFilterOptions() {
 }
 
 async function loadSettings() {
-  const [retailers, telegram] = await Promise.all([
+  const [retailers, telegram, scanConfig] = await Promise.all([
     api("/api/settings/retailers"),
     api("/api/settings/telegram"),
+    api("/api/settings/scan-config"),
   ]);
+  const listOrAll = (arr) => (arr && arr.length ? arr.join(", ") : "All (no filter)");
   $("#settings-content").innerHTML = `
+    <h3>Scan configuration</h3>
+    ${scanConfig.error
+      ? `<p class="meta">${escapeHtml(scanConfig.error)}</p>`
+      : `<dl>
+          <dt>Retailers</dt><dd>${escapeHtml((scanConfig.retailers || []).join(", "))}</dd>
+          <dt>ZIP code</dt><dd>${escapeHtml(scanConfig.zip_code)}</dd>
+          <dt>Radius</dt><dd>${scanConfig.radius_miles} miles</dd>
+          <dt>Watched departments</dt><dd>${escapeHtml(listOrAll(scanConfig.watched_departments))}</dd>
+          <dt>Watch keywords</dt><dd>${escapeHtml(listOrAll(scanConfig.watch_keywords))}</dd>
+          <dt>Scan interval</dt><dd>${scanConfig.scan_interval_minutes} min</dd>
+          <dt>Scan on startup</dt><dd>${scanConfig.scan_on_startup ? "Yes" : "No (dev mode -- trigger manually)"}</dd>
+          <dt>Product list cache</dt><dd>${scanConfig.product_list_cache_hours} hours</dd>
+        </dl>`
+    }
     <h3>Retailers</h3>
     <ul>${retailers.map((r) => `<li>${r.display_name} (${r.slug})</li>`).join("") || "<li>None configured yet</li>"}</ul>
     <h3>Telegram</h3>
