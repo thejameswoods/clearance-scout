@@ -116,14 +116,12 @@ query mediaPriceInventory($itemIds: [String!]!, $storeId: String!) {
 # Full product record (name, brand, canonical URL) -- only needed for
 # confirmed clearance/penny hits, not every product checked.
 #
-# `media { images { url } }` is an UNVERIFIED addition, unlike the rest of
-# this query -- HDScanner (the only confirmed source for this API's real
-# shape) doesn't request any image field anywhere in its own source, so
-# there's nothing to confirm this against. If the field name is wrong,
-# Home Depot's GraphQL API returns a normal, clear schema-validation error
-# (not a silent bad match) naming the real field if one exists -- confirm
-# on first real deploy and fix based on that error, same posture as
-# `identifiers.productLabel` in CATEGORY_QUERY above.
+# `media { images { url } }` had no source to confirm against -- HDScanner
+# doesn't request any image field anywhere in its own source -- so it was
+# added speculatively and verified live 2026-08-31 (a real, working field,
+# real URL returned; see adapters/home_depot/adapter.py's
+# _enrich_confirmed_hit for the "<SIZE>" template substitution the URL
+# itself needs).
 PRODUCT_QUERY = """
 query productClientOnlyProduct($itemId: String!, $storeId: String!) {
   product(itemId: $itemId) {

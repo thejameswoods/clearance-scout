@@ -226,8 +226,14 @@ class HomeDepotAdapter(RetailerAdapter):
         if canonical_url and not canonical_url.startswith("http"):
             canonical_url = f"{HOME_URL.rstrip('/')}{canonical_url}"
 
+        # Confirmed live 2026-08-31: media.images.url is real, but the URL
+        # itself is a size template (".../white-outlet-wall-plates-...-64_
+        # <SIZE>.jpg") -- literal "<SIZE>" isn't a loadable image. The exact
+        # set of valid values isn't confirmed (no source to check this
+        # against, same as the field itself); 400 is a reasonable
+        # thumbnail-to-detail-view size, not a confirmed "correct" one.
         images = (product.get("media") or {}).get("images") or []
-        image_url = images[0].get("url") if images else None
+        image_url = images[0].get("url", "").replace("<SIZE>", "400") if images else None
 
         store_sku_id = identifiers.get("storeSkuNumber")
         aisle = bay = None
