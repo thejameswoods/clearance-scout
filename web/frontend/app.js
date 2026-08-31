@@ -144,6 +144,31 @@ async function loadSettings() {
   `;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+async function loadLogs() {
+  if ($("#logs-pause").checked) return;
+  const view = $("#logs-view");
+  const wasScrolledToBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 20;
+
+  const lines = await api("/api/logs");
+  view.innerHTML = lines
+    .map((l) => {
+      const ts = l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : "";
+      return `<div class="log-line ${l.level}">[${ts}] ${l.level} ${escapeHtml(l.logger)}: ${escapeHtml(l.message)}</div>`;
+    })
+    .join("");
+
+  if ($("#logs-autoscroll").checked && wasScrolledToBottom) {
+    view.scrollTop = view.scrollHeight;
+  }
+}
+
 async function refreshScanStatus() {
   const status = await api("/api/scan/status");
   const badge = $("#scan-state-badge");
@@ -179,6 +204,7 @@ function refreshActiveTab() {
   if (active === "deals") loadDeals();
   if (active === "history") loadHistory();
   if (active === "settings") loadSettings();
+  if (active === "logs") loadLogs();
   if (active === "browser") {
     openBrowserFrame();
   } else {
@@ -228,6 +254,13 @@ async function main() {
   setInterval(() => {
     if ($(".tab-btn.active").dataset.tab === "deals") loadDeals();
   }, 60000);
+  // Logs benefit from a much tighter poll than deals -- this is meant to
+  // feel close to a live tail while the tab is open, not a periodic
+  // refresh. Only fires while the tab is active (loadLogs itself is cheap;
+  // the guard just avoids needless requests while looking at another tab).
+  setInterval(() => {
+    if ($(".tab-btn.active").dataset.tab === "logs") loadLogs();
+  }, 3000);
 }
 
 main();

@@ -170,6 +170,23 @@ table.history-table th, table.history-table td { text-align: left; padding: 4px 
   background: #1a1a1a;
 }
 
+.logs-view {
+  height: 75vh;
+  margin: 0;
+  overflow-y: auto;
+  background: #1a1a1a;
+  color: #d8d8d4;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.logs-view .log-line.WARNING { color: var(--yellow); }
+.logs-view .log-line.ERROR { color: #ff8a80; }
+
 .build-footer {
   text-align: center;
   padding: 10px;

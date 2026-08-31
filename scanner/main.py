@@ -19,10 +19,18 @@ from patchright.sync_api import sync_playwright
 
 from adapters.registry import build_adapter
 from common import db
+from scanner.log_buffer import RingBufferLogHandler
 from scanner.orchestrator import ScanAbortedNeedsLogin, run_scan
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("clearance_scout.scanner")
+
+# Feeds the dashboard's Logs tab (see /logs below and
+# web/backend/routes/logs.py) -- attached to the root logger so it captures
+# everything (orchestrator, adapters, ratelimit), not just this module.
+_log_buffer = RingBufferLogHandler(capacity=int(os.environ.get("LOG_BUFFER_CAPACITY", "500")))
+_log_buffer.setFormatter(logging.Formatter("%(message)s"))
+logging.getLogger().addHandler(_log_buffer)
 
 def _split_env_list(name: str) -> list[str] | None:
     raw = os.environ.get(name, "")
@@ -56,6 +64,11 @@ def health():
 def status():
     with _status_lock:
         return dict(_status)
+
+
+@app.get("/logs")
+def logs():
+    return _log_buffer.records()
 
 
 @app.post("/trigger-scan")
