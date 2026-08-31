@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Clearance Scout — Home Depot bridge",
+  "version": "0.1.0",
+  "description": "Original code, not a fork of any existing scanner extension. Written to run Home Depot API calls from inside a genuine content-script execution context (loaded into the clearance-scout scanner's own browser, driven by its Python backend) rather than reimplementing scanning logic in the extension itself -- see docs/architecture.md.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.homedepot.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.homedepot.com/*",
+    "https://apionline.homedepot.com/*",
+    "http://web:8000/*"
+  ]
+}

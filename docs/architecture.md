@@ -116,6 +116,39 @@ files (`scanner/main.py`, `scanner/Dockerfile`,
 `scanner/requirements.txt`) — no adapter code needed to know or care which
 library produced the browser context.
 
+### A real content script as the API-call execution context
+
+Even with Patchright's CDP-level patches, real request confirmed correct
+(see "Replace placeholder Home Depot endpoints" below) still got a
+generic degraded response from Home Depot's actual API — tried both
+`context.request` and a genuine in-page `fetch()` via `page.evaluate()`,
+with both short and long (20s) post-load dwell times, all identical
+results. A real, installed browser extension is a different execution
+context than either of those and was the one thing not yet tried — so
+`browser-extension/home_depot/` exists specifically to be that context,
+nothing more. Its content script (`content.js`) does the actual `fetch()`
+call; `adapters/home_depot/api_client.py` bridges to it from Python via
+`page.evaluate()` posting a `window.postMessage` the content script
+listens for (the standard way to cross from a page's main world, where
+`page.evaluate()` runs, into a content script's isolated world).
+
+This is original code, not a fork — HDScanner
+(github.com/apedonkey/hdscanner, no license) is read for patterns/API
+facts, same posture as the rest of this project, not copied or vendored.
+See `browser-extension/home_depot/manifest.json` for the licensing
+reasoning spelled out inline. All scheduling, filtering, storage, and
+alerting logic stays exactly where it already was (the Python
+orchestrator, Postgres, the dashboard, the bot) — the extension's only
+job is being a trusted place for one `fetch()` call to originate from.
+Multiple retailers means multiple sibling directories under
+`browser-extension/`, loaded together (`scanner/main.py` loads every
+subdirectory it finds) — not one extension trying to handle every site.
+
+Whether this actually clears Akamai's block is being tested live as this
+is written, not confirmed in advance — worth checking `docs/architecture.md`
+history or the git log around this entry for how it turned out before
+assuming it works.
+
 ### One long-lived, persistent, human-authenticated browser identity
 
 Login (including any CAPTCHA/2FA) is a one-time, human-driven step over

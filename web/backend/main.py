@@ -3,11 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from web.backend.routes import deals, scan, settings, vnc
 
 app = FastAPI(title="Clearance Scout")
+
+# Permissive by design, not oversight: this app already has no auth and is
+# documented as LAN-only (see README's "Access control" section) -- a
+# browser extension's popup (chrome-extension:// origin) needs this to
+# read responses at all, and nothing here is more exposed by allowing it
+# than the no-auth API already is.
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+)
 
 app.include_router(deals.router)
 app.include_router(scan.router)

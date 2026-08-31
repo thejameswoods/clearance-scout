@@ -31,6 +31,7 @@ RUN DEBIAN_FRONTEND=noninteractive patchright install --with-deps chrome
 COPY adapters/ adapters/
 COPY common/ common/
 COPY scanner/ scanner/
+COPY browser-extension/ browser-extension/
 
 ENV DISPLAY=:99 \
     PLAYWRIGHT_PROFILE_DIR=/data/browser-profile \
