@@ -1,29 +1,46 @@
 """Pure-function tests for the Home Depot adapter's signal parsing — no
-browser, no network, no DB. See adapters/home_depot/clearance.py and
-penny.py for why the exact field names here are placeholders pending real
-captured traffic (adapters/home_depot/api_client.py's module docstring)."""
+browser, no network, no DB. Shapes here are confirmed real (see
+adapters/home_depot/api_client.py's module docstring for how), not
+guessed placeholders."""
 
 from __future__ import annotations
 
-from adapters.base import PriceObservation, ProductRef, Department, StoreInfo
-from adapters.home_depot.clearance import detect_clearance
-from adapters.home_depot.penny import detect_penny
 from datetime import datetime, timezone
 
+from adapters.base import Department, PriceObservation, ProductRef, StoreInfo
+from adapters.home_depot.clearance import detect_clearance
+from adapters.home_depot.penny import detect_penny
 
-def test_detect_clearance_from_badge():
-    signal = detect_clearance({"badge": "Clearance"})
+
+def _pickup_option(fulfillable: bool, has_bopis: bool) -> dict:
+    services = [{"type": "bopis", "locations": []}] if has_bopis else []
+    return {"type": "pickup", "fulfillable": fulfillable, "services": services}
+
+
+def test_detect_clearance_advertised_yellow_tag():
+    raw = {
+        "pricing": {"value": 9.97, "original": 24.99, "clearance": {"value": 9.97, "dollarOff": 15.02, "percentageOff": 60}},
+        "fulfillment": {"fulfillmentOptions": [_pickup_option(fulfillable=False, has_bopis=True)]},
+    }
+    signal = detect_clearance(raw)
     assert signal is not None
     assert signal.is_clearance is True
+    assert signal.reason == "advertised_yellow_tag"
 
 
-def test_detect_clearance_from_price_type():
-    signal = detect_clearance({"priceType": "clearance"})
+def test_detect_clearance_unadvertised_when_pickup_still_fulfillable():
+    raw = {
+        "pricing": {"value": 9.97, "original": 24.99, "clearance": {"value": 9.97, "dollarOff": 15.02, "percentageOff": 60}},
+        "fulfillment": {"fulfillmentOptions": [_pickup_option(fulfillable=True, has_bopis=True)]},
+    }
+    signal = detect_clearance(raw)
     assert signal is not None
+    assert signal.reason == "unadvertised_clearance"
 
 
 def test_detect_clearance_none_for_regular_price():
-    assert detect_clearance({"badge": "", "priceType": "regular"}) is None
+    raw = {"pricing": {"value": 24.99, "original": 24.99, "clearance": None}, "fulfillment": {}}
+    assert detect_clearance(raw) is None
 
 
 def _observation(price_cents: int, fulfillment_state: str | None) -> PriceObservation:
@@ -36,7 +53,7 @@ def _observation(price_cents: int, fulfillment_state: str | None) -> PriceObserv
     )
 
 
-def test_detect_penny_true_for_penny_price_and_valid_state():
+def test_detect_penny_true_for_penny_price_and_in_stock():
     assert detect_penny(_observation(1, "in_stock")) is True
 
 

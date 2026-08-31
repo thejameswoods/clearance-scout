@@ -1,92 +1,184 @@
-"""Thin wrapper around Home Depot's internal product/pricing endpoints,
-called through the live authenticated browser context (not a bare HTTP
-client — see adapters/README.md for why).
+"""Home Depot's real internal API — a GraphQL federation gateway, not a
+REST API as originally guessed. Confirmed by reading the public source of
+HDScanner (github.com/apedonkey/hdscanner, no license — the queries/
+endpoints below are facts about how Home Depot's own API works, learned
+from their code, not a copy of their implementation; this file is an
+independent rewrite).
 
-IMPORTANT — this file is a scaffold, not a finished integration.
-Home Depot doesn't publish this API; HDScanner's README only describes its
-*behavior* ("calls Home Depot's own product/pricing API from within your
-browser tab"), not the actual endpoint paths, request shapes, or response
-JSON. Nobody should ship fabricated endpoint guesses — a wrong-but-plausible
-URL fails silently or, worse, "succeeds" against the wrong data. The real
-paths/payloads have to come from capturing genuine traffic:
+All calls are POSTs to GRAPHQL_URL with `?opname=<operation>` and a JSON
+body of `{operationName, variables, query}`, issued through the live
+browser context (see adapters/README.md for why) so they carry the same
+cookies/headers/session as the visible browser.
 
-    1. Log into homedepot.com in the scanner container's noVNC session
-       (this is the same one-time login step the deploy docs already call
-       for).
-    2. Open DevTools → Network → XHR/Fetch, browse a department page and a
-       product page for your store, and note the request URLs, headers, and
-       JSON response shape actually used.
-    3. Fill in HD_ENDPOINTS below and adjust the parsing in departments.py /
-       adapter.py / clearance.py / penny.py to match what you captured.
-
-Keep the *shape* of this module (config-driven base URL + endpoint paths,
-one method per phase, everything routed through `browser_ctx.request`) —
-just replace the placeholder paths once you have real ones.
+Home Depot's own bot-management layer for this API is Akamai (a 403/429
+here is Akamai, not PerimeterX — PerimeterX guards the login flow
+specifically, which this project no longer touches; see
+docs/architecture.md). Confirmed safe pacing from the same source:
+16 itemIds max per mediaPriceInventory call, small (300-500ms) pauses
+between batches, conservative parallelism (2-5 concurrent requests).
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-HD_BASE_URL = os.environ.get("HOME_DEPOT_BASE_URL", "https://www.homedepot.com")
-
-# Placeholder paths — replace with real captured endpoints (see module
-# docstring). Left as named constants, not inlined, so the one place that
-# needs updating after packet-capture is obvious.
-HD_ENDPOINTS = {
-    "store_search": "/api/store-search",       # ZIP -> nearby stores
-    "department_list": "/api/departments",      # store -> department tree
-    "department_products": "/api/browse",       # department -> product IDs
-    "product_price": "/api/product-price",      # product + store -> price/clearance
+GRAPHQL_URL = "https://apionline.homedepot.com/federation-gateway/graphql"
+GRAPHQL_HEADERS = {
+    "Content-Type": "application/json",
+    "x-experience-name": "general-merchandise",
 }
+
+# Home Depot's own documented max for a single mediaPriceInventory call.
+PRICE_CHECK_MAX_BATCH = 16
+
+STORE_SEARCH_QUERY = """
+query storeSearch($lat: String, $lng: String, $storeSearchInput: String, $pagesize: String, $storeFeaturesFilter: StoreFeaturesFilter) {
+  storeSearch(
+    lat: $lat
+    lng: $lng
+    storeSearchInput: $storeSearchInput
+    pagesize: $pagesize
+    storeFeaturesFilter: $storeFeaturesFilter
+  ) {
+    stores {
+      storeId
+      name
+      address { street city state postalCode country }
+      coordinates { lat lng }
+      distance
+      phone
+      storeType
+    }
+  }
+}"""
+
+# Category product listing -- returns item IDs for a department (navParam),
+# paginated. `storefilter: IN_STORE` matches HDScanner's default (only
+# products actually stocked somewhere), `orderBy` matches their default
+# (TOP_SELLERS) since it doesn't affect which items exist, just the order
+# pages are walked in.
+#
+# HDScanner's own version of this query requests only `itemId` -- they
+# don't need a name at this stage (their keyword/department narrowing
+# happens differently than ours). WATCH_KEYWORDS filters ProductRefs by
+# name *before* any price check (see scanner/orchestrator.py) specifically
+# to keep the request footprint small, which only works if a real name is
+# available this early. `identifiers { productLabel }` below is an
+# UNVERIFIED addition, not confirmed from HDScanner's source -- an
+# educated guess that `searchModel.products` shares the same underlying
+# Product type as the standalone `product(itemId)` query (which does have
+# `identifiers.productLabel`, see PRODUCT_QUERY). Confirm this works on
+# first real deploy; if the field doesn't exist on this type, this query
+# will fail loudly (a normal GraphQL error, not a silent bad match) and
+# needs a different fix -- e.g. a cheap batched name-only lookup before
+# price-checking, rather than assuming the fields overlap.
+CATEGORY_QUERY = """
+query searchModel(
+  $storeId: String, $navParam: String, $storefilter: StoreFilter,
+  $channel: Channel, $additionalSearchParams: AdditionalParams,
+  $isBrandPricingPolicyCompliant: Boolean,
+  $orderBy: ProductSort, $ps: Int, $si: Int
+) {
+  searchModel(
+    navParam: $navParam, storeId: $storeId, storefilter: $storefilter,
+    channel: $channel, additionalSearchParams: $additionalSearchParams,
+    isBrandPricingPolicyCompliant: $isBrandPricingPolicyCompliant
+  ) {
+    metadata { productCount { inStore } }
+    products(pageSize: $ps, startIndex: $si, orderBy: $orderBy) {
+      itemId
+      identifiers { productLabel }
+    }
+  }
+}"""
+
+# Price/clearance/fulfillment for up to PRICE_CHECK_MAX_BATCH items at once.
+MEDIA_PRICE_INVENTORY_QUERY = """
+query mediaPriceInventory($itemIds: [String!]!, $storeId: String!) {
+  products(itemIds: $itemIds) {
+    itemId
+    pricing(storeId: $storeId) { value original clearance { value dollarOff percentageOff } }
+    fulfillment(storeId: $storeId) { fulfillmentOptions { type fulfillable services { type locations { inventory { quantity isInStock } locationId } } } }
+  }
+}"""
+
+# Full product record (name, brand, canonical URL) -- only needed for
+# confirmed clearance/penny hits, not every product checked.
+PRODUCT_QUERY = """
+query productClientOnlyProduct($itemId: String!, $storeId: String!) {
+  product(itemId: $itemId) {
+    itemId
+    identifiers { productLabel brandName canonicalUrl modelNumber storeSkuNumber }
+    pricing(storeId: $storeId) { value original clearance { value dollarOff percentageOff } }
+  }
+}"""
 
 
 class HomeDepotApiClient:
-    """Issues calls via the live Playwright BrowserContext's own request API
-    (`context.request`), so cookies, headers, and TLS fingerprint match a
-    real browser tab. If 403 rates prove that insufficient even with a
-    genuine session, fall back to in-page `page.evaluate(...fetch...)`
-    instead of a bare HTTP client — see adapters/README.md."""
+    """Issues calls via the live Playwright/Patchright BrowserContext's own
+    request API (`context.request`), so cookies, headers, and TLS
+    fingerprint match a real browser tab."""
 
     def __init__(self, browser_ctx: Any):
         self._ctx = browser_ctx
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self._ctx.request.get(f"{HD_BASE_URL}{path}", params=params or {})
-        if response.status == 403:
-            raise PermissionError(f"Home Depot returned 403 for {path}")
+    def _graphql(self, operation: str, variables: dict[str, Any], query: str) -> dict[str, Any]:
+        response = self._ctx.request.post(
+            f"{GRAPHQL_URL}?opname={operation}",
+            headers=GRAPHQL_HEADERS,
+            data={"operationName": operation, "variables": variables, "query": query},
+        )
+        if response.status in (403, 429):
+            raise PermissionError(f"Home Depot (Akamai) returned {response.status} for {operation}")
         try:
-            response_json = response.json()
+            return response.json()
         except ValueError as exc:
-            # A non-JSON body almost always means HD_ENDPOINTS still holds a
-            # placeholder path (see this module's docstring) -- the request
-            # hit a real HTML page (login wall, 404, etc.), not an API.
-            # Surfaced clearly instead of a bare JSONDecodeError so it's
-            # obvious this adapter needs real captured endpoints, not that
-            # something is randomly broken.
             raise RuntimeError(
-                f"Home Depot returned a non-JSON response for {path} (status {response.status}) — "
-                "this endpoint is still a placeholder; see adapters/home_depot/api_client.py."
+                f"Home Depot returned a non-JSON response for {operation} (status {response.status})"
             ) from exc
-        return response_json if isinstance(response_json, dict) else {"data": response_json}
 
     def store_search(self, zip_code: str, radius_miles: float) -> dict[str, Any]:
-        # Confirm the real param name/units for a radius search when you
-        # capture this endpoint — "radius" here is a placeholder guess.
-        return self._get(HD_ENDPOINTS["store_search"], {"zip": zip_code, "radius": radius_miles})
-
-    def department_list(self, store_id: str) -> dict[str, Any]:
-        return self._get(HD_ENDPOINTS["department_list"], {"storeId": store_id})
-
-    def department_products(self, store_id: str, department_id: str) -> dict[str, Any]:
-        return self._get(
-            HD_ENDPOINTS["department_products"],
-            {"storeId": store_id, "departmentId": department_id},
+        # radius_miles isn't a real storeSearch param (HDScanner doesn't use
+        # one either -- pagesize=20 is the only result-count control) --
+        # kept in the adapter signature for the generic contract, applied
+        # as a post-filter on `distance` in the adapter instead.
+        return self._graphql(
+            "storeSearch",
+            {
+                "lat": "", "lng": "", "pagesize": "20",
+                "storeSearchInput": zip_code, "storeFeaturesFilter": {},
+            },
+            STORE_SEARCH_QUERY,
         )
 
-    def product_price(self, store_id: str, product_id: str) -> dict[str, Any]:
-        return self._get(
-            HD_ENDPOINTS["product_price"],
-            {"storeId": store_id, "itemId": product_id},
+    def category_products(
+        self, store_id: str, nav_param: str, page_size: int = 48, start_index: int = 0
+    ) -> dict[str, Any]:
+        return self._graphql(
+            "searchModel",
+            {
+                "storeId": store_id, "navParam": nav_param,
+                "storefilter": "IN_STORE", "channel": "DESKTOP",
+                "isBrandPricingPolicyCompliant": False,
+                "additionalSearchParams": {"multiStoreIds": []},
+                "orderBy": {"field": "TOP_SELLERS", "order": "ASC"},
+                "ps": page_size, "si": start_index,
+            },
+            CATEGORY_QUERY,
+        )
+
+    def media_price_inventory(self, store_id: str, item_ids: list[str]) -> dict[str, Any]:
+        if len(item_ids) > PRICE_CHECK_MAX_BATCH:
+            raise ValueError(f"media_price_inventory: max {PRICE_CHECK_MAX_BATCH} itemIds per call")
+        return self._graphql(
+            "mediaPriceInventory",
+            {"itemIds": item_ids, "storeId": store_id},
+            MEDIA_PRICE_INVENTORY_QUERY,
+        )
+
+    def product_detail(self, store_id: str, item_id: str) -> dict[str, Any]:
+        return self._graphql(
+            "productClientOnlyProduct",
+            {"itemId": item_id, "storeId": store_id},
+            PRODUCT_QUERY,
         )

@@ -17,6 +17,13 @@ from .clearance import detect_clearance as _detect_clearance
 from .departments import discover_departments as _discover_departments
 from .penny import detect_penny as _detect_penny
 
+# HDScanner's own validated pagination limits for category listing (see
+# api_client.py's module docstring for how these were confirmed).
+CATEGORY_PAGE_SIZE = 48
+CATEGORY_MAX_PAGES = 5  # 5*48=240 items/department -- more conservative than
+                         # HDScanner's 15-page/720-item cap; WATCHED_DEPARTMENTS
+                         # already narrows scope, so exhaustiveness matters less.
+
 
 class HomeDepotAdapter(RetailerAdapter):
     retailer_slug = "home_depot"
@@ -46,62 +53,116 @@ class HomeDepotAdapter(RetailerAdapter):
     ) -> Iterator[StoreInfo]:
         client = HomeDepotApiClient(browser_ctx)
         response = client.store_search(zip_code, radius_miles)
-        for raw in response.get("stores", []):
+        stores = response.get("data", {}).get("storeSearch", {}).get("stores") or []
+        for raw in stores:
+            distance = raw.get("distance")
+            # storeSearch has no radius param of its own (confirmed --
+            # HDScanner doesn't use one either); apply it client-side.
+            if distance is not None and distance > radius_miles:
+                continue
+            address_parts = raw.get("address") or {}
+            address = ", ".join(
+                p for p in (
+                    address_parts.get("street"),
+                    address_parts.get("city"),
+                    address_parts.get("state"),
+                    address_parts.get("postalCode"),
+                ) if p
+            ) or None
             yield StoreInfo(
                 retailer_store_id=str(raw["storeId"]),
                 zip_code=zip_code,
                 name=raw.get("name"),
-                address=raw.get("address"),
-                distance_miles=raw.get("distance"),
+                address=address,
+                distance_miles=distance,
             )
 
     def select_store(self, browser_ctx: Any, store: StoreInfo) -> None:
-        # Home Depot's site typically needs the store set via a page
-        # interaction/cookie, not just an API param — confirm the real
-        # mechanism from captured traffic (adapters/home_depot/api_client.py)
-        # and do it here if so. Recording the id on the context is enough
-        # for _require_store_id() either way.
+        # Confirmed: storeId is just a per-request GraphQL variable, not
+        # site-side state (no cookie/page interaction needed to "select" a
+        # store) -- see api_client.py. Recording it on the context is all
+        # _require_store_id() needs.
         browser_ctx.clearance_scout_store_id = store.retailer_store_id
 
     def discover_departments(self, browser_ctx: Any) -> Iterator[Department]:
-        client = HomeDepotApiClient(browser_ctx)
-        store_id = self._require_store_id(browser_ctx)
-        yield from _discover_departments(client, store_id)
+        yield from _discover_departments(browser_ctx)
 
     def list_products(
         self, browser_ctx: Any, department: Department
     ) -> Iterator[ProductRef]:
         client = HomeDepotApiClient(browser_ctx)
         store_id = self._require_store_id(browser_ctx)
-        response = client.department_products(store_id, department.retailer_department_id)
-        for raw in response.get("products", []):
-            yield ProductRef(
-                retailer_product_id=str(raw["itemId"]),
-                name=raw["name"],
-                department=department,
-                upc=raw.get("upc"),
-                image_url=raw.get("imageUrl"),
+
+        seen_item_ids: set[str] = set()
+        for page in range(CATEGORY_MAX_PAGES):
+            response = client.category_products(
+                store_id, department.retailer_department_id,
+                page_size=CATEGORY_PAGE_SIZE, start_index=page * CATEGORY_PAGE_SIZE,
             )
+            search_model = response.get("data", {}).get("searchModel") or {}
+            products = search_model.get("products") or []
+            if not products:
+                break
+            for raw in products:
+                item_id = raw.get("itemId")
+                if not item_id or item_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(item_id)
+                # See CATEGORY_QUERY's docstring in api_client.py: the name
+                # field here is an unverified addition to HDScanner's
+                # original query. Falling back to the item_id keeps this
+                # from crashing if it's missing -- but WATCH_KEYWORDS can't
+                # actually filter anything meaningful without a real name,
+                # so treat an all-item_id product list as a signal this
+                # needs the fallback lookup mentioned in that docstring.
+                name = (raw.get("identifiers") or {}).get("productLabel") or str(item_id)
+                yield ProductRef(
+                    retailer_product_id=str(item_id),
+                    name=name,
+                    department=department,
+                )
+            if len(products) < CATEGORY_PAGE_SIZE:
+                break
 
     def check_price(
         self, browser_ctx: Any, product_ref: ProductRef, store: StoreInfo
     ) -> PriceObservation:
+        # NOTE: Home Depot's real API supports up to 16 itemIds per
+        # mediaPriceInventory call (see api_client.py) -- HDScanner batches
+        # aggressively for exactly this reason. This adapter currently
+        # calls it one item at a time because RetailerAdapter.check_price()
+        # is a per-product method (see adapters/base.py). That's up to 16x
+        # more requests than necessary and a real known inefficiency, not
+        # fixed here -- batching would need a contract change (a
+        # check_prices(product_refs) -> Iterator[PriceObservation] method,
+        # or similar) touching base.py and orchestrator.py, deliberately
+        # deferred rather than rushed alongside everything else in this
+        # session.
         client = HomeDepotApiClient(browser_ctx)
-        raw = client.product_price(store.retailer_store_id, product_ref.retailer_product_id)
+        response = client.media_price_inventory(store.retailer_store_id, [product_ref.retailer_product_id])
+        products = response.get("data", {}).get("products") or []
+        if not products:
+            raise RuntimeError(
+                f"Home Depot returned no data for item {product_ref.retailer_product_id} "
+                "(delisted, invalid ID, or not carried at this store)"
+            )
+        raw = products[0]
 
         clearance_signal = self.detect_clearance(raw)
         aisle, bay = self.location_hint(browser_ctx, product_ref, store)
+        pricing = raw.get("pricing") or {}
+        fulfillment_state = self._pickup_fulfillment_state(raw)
 
         observation = PriceObservation(
             product_ref=product_ref,
             store=store,
             observed_at=datetime.now(timezone.utc),
-            price_cents=int(round(float(raw["price"]) * 100)),
+            price_cents=int(round(float(pricing["value"]) * 100)),
             list_price_cents=(
-                int(round(float(raw["listPrice"]) * 100)) if raw.get("listPrice") else None
+                int(round(float(pricing["original"]) * 100)) if pricing.get("original") else None
             ),
             is_clearance=bool(clearance_signal and clearance_signal.is_clearance),
-            fulfillment_state=raw.get("fulfillmentState"),
+            fulfillment_state=fulfillment_state,
             aisle=aisle,
             bay=bay,
             raw_signal=raw,
@@ -122,21 +183,42 @@ class HomeDepotAdapter(RetailerAdapter):
     def location_hint(
         self, browser_ctx: Any, product_ref: ProductRef, store: StoreInfo
     ) -> tuple[str | None, str | None]:
-        # HD's product_price response may include aisle/bay directly —
-        # confirm from a captured response and read it here instead of a
-        # second request, if so.
+        # A real `aislebay` GraphQL query exists (confirmed alongside
+        # everything else in api_client.py's module docstring) but takes
+        # storeSkuIds, a different ID namespace than the itemIds used
+        # everywhere else here -- wiring it in is a real follow-up, not
+        # done now to keep this change reviewable.
         return (None, None)
 
     def rate_limit_policy(self) -> RateLimitPolicy:
-        # Starting point matching HDScanner's documented behavior (403 ->
-        # 15 min floor, several-hour ceiling). Tune min/max delay once you
-        # have real-world 403 rates to react to.
+        # Confirmed real values (not a guess from HDScanner's README
+        # prose, which was more conservative than what their actual code
+        # does) -- see api_client.py's module docstring. Their 403/429
+        # backoff is 10s/30s/90s exponential + jitter (Akamai, not
+        # PerimeterX -- this API layer isn't the login flow). min/max
+        # delay here is more conservative than their ~300-500ms
+        # between-wave pacing on purpose: they pace between waves of 16
+        # batched items; this adapter calls one item at a time (see
+        # check_price's docstring note), so matching their per-wave delay
+        # here would mean far more total request volume in the same
+        # window than their validated-safe pattern.
         return RateLimitPolicy(
-            min_delay_seconds=2.0,
-            max_delay_seconds=6.0,
-            backoff_on_403_seconds=15 * 60,
-            max_backoff_seconds=6 * 60 * 60,
+            min_delay_seconds=1.5,
+            max_delay_seconds=3.0,
+            backoff_on_403_seconds=10,
+            max_backoff_seconds=90,
         )
+
+    def _pickup_fulfillment_state(self, raw_product: dict[str, Any]) -> str | None:
+        for option in raw_product.get("fulfillment", {}).get("fulfillmentOptions", []) or []:
+            if option.get("type") != "pickup":
+                continue
+            for service in option.get("services", []) or []:
+                for location in service.get("locations", []) or []:
+                    inventory = location.get("inventory") or {}
+                    if inventory.get("isInStock"):
+                        return "in_stock"
+        return None
 
     def _require_store_id(self, browser_ctx: Any) -> str:
         store_id = getattr(browser_ctx, "clearance_scout_store_id", None)
