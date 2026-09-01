@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Clearance Scout</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -46,38 +48,42 @@
             <button id="scope-descendants-toggle" class="tag-toggle" type="button"></button>
           </div>
 
-          <div class="filters">
-            <input id="f-search" type="search" placeholder="Search these deals…" />
-            <select id="f-sort">
-              <option value="recent">Newest</option>
-              <option value="oldest">Oldest</option>
-              <option value="discount">Biggest discount</option>
-              <option value="price">Lowest price</option>
-              <option value="stock">Most stock</option>
-            </select>
-            <label><input type="checkbox" id="f-clearance" /> Clearance only</label>
-            <label><input type="checkbox" id="f-penny" /> Penny only</label>
-            <input id="f-min-discount" type="number" min="0" max="100" placeholder="Min % off" />
-            <input id="f-price-min" type="number" min="0" step="0.01" placeholder="Min $" />
-            <input id="f-price-max" type="number" min="0" step="0.01" placeholder="Max $" />
-            <label><input type="checkbox" id="f-in-stock" /> In stock only</label>
+          <div class="dv-filters-row">
+            <input id="f-search" type="search" placeholder="Search these deals…" class="dv-input dv-search" />
+            <span class="dv-sort-control">
+              <span class="dv-label-inline">Sort:</span>
+              <select id="f-sort" class="dv-select">
+                <option value="recent">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="discount">Biggest discount</option>
+                <option value="price">Lowest price</option>
+                <option value="stock">Most stock</option>
+              </select>
+            </span>
+            <span class="dv-filters-wrap">
+              <button id="filters-toggle-btn" class="dv-btn dv-btn-outline" type="button">
+                Filters<span id="filters-count-badge" class="dv-filters-count" hidden>0</span> ▾
+              </button>
+              <div id="filters-popover" class="dv-popover" hidden>
+                <label class="dv-check"><input type="checkbox" id="f-clearance" /> Clearance only</label>
+                <label class="dv-check"><input type="checkbox" id="f-penny" /> Penny only</label>
+                <label class="dv-field">Min % off <input id="f-min-discount" type="number" min="0" max="100" class="dv-input dv-input-sm" /></label>
+                <label class="dv-field">Min $ <input id="f-price-min" type="number" min="0" step="0.01" class="dv-input dv-input-sm" /></label>
+                <label class="dv-field">Max $ <input id="f-price-max" type="number" min="0" step="0.01" class="dv-input dv-input-sm" /></label>
+                <label class="dv-check"><input type="checkbox" id="f-in-stock" /> In stock only</label>
+                <button id="filters-clear-btn" class="dv-btn dv-btn-outline dv-filters-clear" type="button">Clear filters</button>
+              </div>
+            </span>
           </div>
 
-          <div id="status-bar" class="status-bar"></div>
+          <div class="dv-status-row">
+            <span class="dv-label-inline">Status</span>
+            <div id="status-bar" class="status-bar"></div>
+          </div>
           <div id="new-bar" class="new-bar" hidden></div>
 
-          <div class="table-wrap">
-            <table class="deal-table">
-              <thead>
-                <tr>
-                  <th>Image</th><th>Product</th><th>Store(s)</th><th>Price</th>
-                  <th>Detected</th><th>Discount</th><th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="deal-table-body"></tbody>
-            </table>
-            <p id="deal-table-empty" class="meta" hidden>No deals matching these filters yet — trigger a scan or widen your filters.</p>
-          </div>
+          <div id="deal-list" class="deal-list"></div>
+          <p id="deal-table-empty" class="meta" hidden>No deals matching these filters yet — trigger a scan or widen your filters.</p>
         </div>
       </div>
     </section>

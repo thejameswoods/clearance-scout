@@ -43,6 +43,19 @@ function discountBadge(rows) {
   return `<span class="${cls}">${text}</span>`;
 }
 
+// Deals-tab-specific tag styling (.dv-tag) -- kept separate from
+// discountBadge (used by History's dealCard, untouched by this rewrite)
+// rather than parameterizing it, so the two tabs' visual languages can't
+// bleed into each other by accident.
+function dvDiscountTag(rows) {
+  const pcts = rows.map((r) => r.discount_pct).filter((p) => p != null);
+  const anyPenny = rows.some((r) => r.is_penny);
+  if (pcts.length === 0) return anyPenny ? `<span class="dv-tag penny">Penny</span>` : "";
+  const lo = Math.min(...pcts), hi = Math.max(...pcts);
+  const text = lo === hi ? `${lo}%` : `${lo}%–${hi}%`;
+  return `<span class="dv-tag">${text}</span>`;
+}
+
 // Groups per-store deal rows (what /api/deals returns) into one entry per
 // product -- price/discount range + location count, matching how the
 // dashboard's Deals table displays a product once rather than once per
@@ -125,13 +138,13 @@ function renderStoreLineHtml(productId, rows) {
     const r = rows[0];
     return `${escapeHtml(r.store_name || r.retailer_store_id)}${r.aisle ? ` · Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""}`;
   }
-  return `<span class="store-expand-toggle" data-toggle-for="${productId}">▾ ${rows.length} stores</span>`;
+  return `<span class="dv-expand-toggle" data-toggle-for="${productId}">▾ ${rows.length} of ${rows.length} stores</span>`;
 }
 
 function renderDealsTable(groups) {
-  const body = $("#deal-table-body");
+  const list = $("#deal-list");
   const empty = $("#deal-table-empty");
-  body.innerHTML = "";
+  list.innerHTML = "";
   empty.hidden = groups.size > 0;
 
   for (const [productId, rows] of groups) {
@@ -140,70 +153,73 @@ function renderDealsTable(groups) {
     const addedAt = rows.reduce((min, r) => (r.created_at < min ? r.created_at : min), first.created_at);
     const isDeferred = rows.every((r) => r.status === "deferred");
 
-    const tr = document.createElement("tr");
-    tr.dataset.product = productId;
-    tr.innerHTML = `
-      <td>${first.image_url ? `<img class="thumb" src="${first.image_url}" alt="">` : ""}</td>
-      <td>
-        <div class="product-name">
+    const row = document.createElement("div");
+    row.className = "deal-row";
+    row.dataset.product = productId;
+    row.innerHTML = `
+      ${first.image_url ? `<img class="dv-thumb" src="${first.image_url}" alt="">` : `<div class="dv-thumb-placeholder"></div>`}
+      <div class="dv-body">
+        <div class="dv-name">
           <a href="${cheapest.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(first.product_name)}</a>
-          ${rows.length > 1 ? `<span class="product-dept">↗ ${escapeHtml(cheapest.retailer_store_id || "")}</span>` : ""}
+          ${rows.length > 1 ? `<span class="dv-store-badge">↗ ${escapeHtml(cheapest.retailer_store_id || "")}</span>` : ""}
         </div>
-        <div class="product-dept">${first.department_name ? escapeHtml(first.department_name) + " · " : ""}SKU ${escapeHtml(first.retailer_product_id)}</div>
-        ${isDeferred ? `<div class="deferred-note">${deferredNoteText(cheapest)}</div>` : ""}
-      </td>
-      <td class="store-line">${renderStoreLineHtml(productId, rows)}</td>
-      <td>${priceRangeText(rows)}${first.list_price_cents ? `<div class="product-dept" style="text-decoration:line-through">${money(first.list_price_cents)}</div>` : ""}</td>
-      <td class="detected-col">
-        <div class="relative">${relTime(addedAt)}</div>
-        <div class="absolute">${new Date(addedAt).toLocaleString()}</div>
-      </td>
-      <td>${discountBadge(rows)}</td>
-      <td class="action-col" style="position:relative">
+        <div class="dv-subline">${first.department_name ? escapeHtml(first.department_name) + " · " : ""}SKU ${escapeHtml(first.retailer_product_id)}</div>
+        <div class="dv-store-line">${renderStoreLineHtml(productId, rows)}</div>
+        ${isDeferred ? `<div class="dv-deferred-note">${deferredNoteText(cheapest)}</div>` : ""}
+      </div>
+      <div class="dv-price">
+        <div class="now">${priceRangeText(rows)}</div>
+        ${first.list_price_cents ? `<div class="was">${money(first.list_price_cents)}</div>` : ""}
+      </div>
+      <div class="dv-detected">
+        <div class="rel">${relTime(addedAt)}</div>
+        <div class="abs">${new Date(addedAt).toLocaleString()}</div>
+      </div>
+      <div class="dv-discount">${dvDiscountTag(rows)}</div>
+      <div class="dv-actions">
         ${isDeferred ? `
-          <button class="secondary undefer-btn" data-deal="${cheapest.deal_id}">Change</button>
-          <button class="secondary not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Never</button>
+          <div class="dv-plain-actions">
+            <button class="undefer-btn" data-deal="${cheapest.deal_id}">Change</button>
+            <button class="not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Never</button>
+          </div>
         ` : `
-          <div class="split-btn">
-            <button class="want-btn" data-deal="${cheapest.deal_id}">Want</button>
-            <button class="secondary not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Not interested</button>
-            <button class="secondary not-yet-caret" data-deal="${cheapest.deal_id}" data-product-name="${escapeHtml(first.product_name)}" type="button">▾</button>
+          <div class="dv-split">
+            <button class="dv-want-btn" data-deal="${cheapest.deal_id}">Want</button>
+            <button class="dv-not-interested-btn not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Not interested</button>
+            <button class="dv-not-yet-caret not-yet-caret" data-deal="${cheapest.deal_id}" data-product-name="${escapeHtml(first.product_name)}" type="button">▾</button>
           </div>
         `}
-      </td>
+      </div>
     `;
-    tr.addEventListener("click", (ev) => {
-      if (ev.target.closest("button, a, .store-expand-toggle")) return;
+    row.addEventListener("click", (ev) => {
+      if (ev.target.closest("button, a, .dv-expand-toggle")) return;
       openProductDetail(productId);
     });
-    body.appendChild(tr);
+    list.appendChild(row);
 
     if (rows.length > 1) {
-      const expandRow = document.createElement("tr");
-      expandRow.className = "store-expand-row";
+      const expandRow = document.createElement("div");
+      expandRow.className = "dv-expand-row";
       expandRow.hidden = true;
       expandRow.dataset.expandFor = productId;
-      const cell = document.createElement("td");
-      cell.colSpan = 7;
-      cell.innerHTML = rows
+      expandRow.innerHTML = rows
         .slice()
         .sort((a, b) => a.price_cents - b.price_cents)
         .map(
           (r) => `
-          <div class="store-expand-item">
-            <span><a href="${r.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
-              ${r.aisle ? `· Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""} · detected ${relTime(r.created_at)}</span>
-            <span>${money(r.price_cents)}</span>
-            <button class="secondary add-store-btn" data-deal="${r.deal_id}">Add to this store's list</button>
+          <div class="dv-expand-item">
+            <a href="${r.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
+            <span class="dv-expand-meta">${r.aisle ? `Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""} · ` : ""}detected ${relTime(r.created_at)}</span>
+            <span class="dv-expand-price">${money(r.price_cents)}</span>
+            <button class="add-store-btn" data-deal="${r.deal_id}">Add to this store's list</button>
           </div>`
         )
         .join("");
-      expandRow.appendChild(cell);
-      body.appendChild(expandRow);
+      list.appendChild(expandRow);
     }
   }
 
-  wireDealRowActions(body);
+  wireDealRowActions(list);
 }
 
 function deferredNoteText(row) {
@@ -214,22 +230,22 @@ function deferredNoteText(row) {
   return `Waiting for ≥${rule.value}% off.`;
 }
 
-function wireDealRowActions(body) {
-  body.querySelectorAll(".store-expand-toggle").forEach((el) =>
+function wireDealRowActions(list) {
+  list.querySelectorAll(".dv-expand-toggle").forEach((el) =>
     el.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      const row = body.querySelector(`tr.store-expand-row[data-expand-for="${el.dataset.toggleFor}"]`);
+      const row = list.querySelector(`.dv-expand-row[data-expand-for="${el.dataset.toggleFor}"]`);
       if (row) row.hidden = !row.hidden;
     })
   );
-  body.querySelectorAll(".want-btn, .add-store-btn").forEach((btn) =>
+  list.querySelectorAll(".dv-want-btn, .add-store-btn").forEach((btn) =>
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       await api(`/api/deals/${btn.dataset.deal}/save`, { method: "POST" });
       loadDeals();
     })
   );
-  body.querySelectorAll(".not-interested-btn").forEach((btn) =>
+  list.querySelectorAll(".not-interested-btn").forEach((btn) =>
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       const productId = btn.dataset.product;
@@ -239,7 +255,7 @@ function wireDealRowActions(body) {
       loadTree();
     })
   );
-  body.querySelectorAll(".undefer-btn").forEach((btn) =>
+  list.querySelectorAll(".undefer-btn").forEach((btn) =>
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       await api(`/api/deals/${btn.dataset.deal}/undefer`, { method: "POST" });
@@ -247,7 +263,7 @@ function wireDealRowActions(body) {
       loadTree();
     })
   );
-  body.querySelectorAll(".not-yet-caret").forEach((btn) =>
+  list.querySelectorAll(".not-yet-caret").forEach((btn) =>
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       toggleNotYetPanel(btn);
@@ -281,12 +297,12 @@ function toggleNotYetPanel(caretBtn) {
     <label><input type="radio" name="ny-type" value="never"> Never — hide this product for good</label>
     <div class="modal-actions">
       <button id="ny-set" type="button">Set threshold</button>
-      <button id="ny-cancel" class="secondary" type="button">Cancel</button>
+      <button id="ny-cancel" type="button">Cancel</button>
     </div>
     <div class="footnote">Row leaves the feed and returns as new only if the threshold is met — at any store where it's met.</div>
   `;
   caretBtn.classList.add("open");
-  caretBtn.closest("td").appendChild(panel);
+  caretBtn.closest(".dv-actions").appendChild(panel);
   panel.addEventListener("click", (ev) => ev.stopPropagation());
 
   panel.querySelector("#ny-cancel").addEventListener("click", closeNotYetPanel);
@@ -294,7 +310,7 @@ function toggleNotYetPanel(caretBtn) {
     const type = panel.querySelector('input[name="ny-type"]:checked').value;
     const productName = caretBtn.dataset.productName;
     if (type === "never") {
-      const productId = caretBtn.closest("tr").dataset.product;
+      const productId = caretBtn.closest(".deal-row").dataset.product;
       await api(`/api/products/${productId}/dismiss`, { method: "POST" });
       recordLastAction({ type: "dismiss", productId, label: `dismissed: ${productName}` });
     } else {
@@ -342,10 +358,10 @@ function renderNewBar({ newCount, total, triageActive }) {
   const parts = [];
   if (newCount > 0) {
     parts.push(`<span><strong>${newCount} new</strong> · ${total} total</span>`);
-    parts.push(`<button type="button" id="triage-new-btn" class="secondary">${triageActive ? "Show all" : "Triage new only"}</button>`);
+    parts.push(`<button type="button" id="triage-new-btn" class="dv-btn dv-btn-outline">${triageActive ? "Show all" : "Triage new only"}</button>`);
   }
   if (window._lastAction) {
-    parts.push(`<span class="meta">Last ${escapeHtml(window._lastAction.label)} <button type="button" id="undo-btn" class="secondary">undo</button></span>`);
+    parts.push(`<span>Last ${escapeHtml(window._lastAction.label)} <button type="button" id="undo-btn" class="dv-btn dv-btn-outline">undo</button></span>`);
   }
   bar.innerHTML = parts.join("");
   $("#triage-new-btn")?.addEventListener("click", () => {
@@ -1075,12 +1091,47 @@ function setupTabs() {
   });
 }
 
+const POPOVER_FILTER_IDS = ["#f-clearance", "#f-penny", "#f-min-discount", "#f-price-min", "#f-price-max", "#f-in-stock"];
+
+function updateFiltersCountBadge() {
+  const active = POPOVER_FILTER_IDS.filter((sel) => {
+    const el = $(sel);
+    return el.type === "checkbox" ? el.checked : el.value.trim() !== "";
+  }).length;
+  const badge = $("#filters-count-badge");
+  badge.textContent = String(active);
+  badge.hidden = active === 0;
+}
+
+function setupFiltersPopover() {
+  const toggleBtn = $("#filters-toggle-btn");
+  const popover = $("#filters-popover");
+  toggleBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    popover.hidden = !popover.hidden;
+  });
+  popover.addEventListener("click", (ev) => ev.stopPropagation());
+  document.addEventListener("click", () => { popover.hidden = true; });
+
+  $("#filters-clear-btn").addEventListener("click", () => {
+    $("#f-clearance").checked = false;
+    $("#f-penny").checked = false;
+    $("#f-min-discount").value = "";
+    $("#f-price-min").value = "";
+    $("#f-price-max").value = "";
+    $("#f-in-stock").checked = false;
+    updateFiltersCountBadge();
+    loadDeals();
+  });
+}
+
 function setupFilters() {
   // Sidebar tree selections and the status-bar tags fire their own reload
   // (selectRetailer/selectStore/selectDepartment, renderStatusBar) -- this
   // only wires the filter row above the deal list.
+  setupFiltersPopover();
   ["#f-clearance", "#f-penny", "#f-min-discount", "#f-price-min", "#f-price-max", "#f-in-stock", "#f-sort"].forEach(
-    (sel) => $(sel).addEventListener("change", loadDeals)
+    (sel) => $(sel).addEventListener("change", () => { updateFiltersCountBadge(); loadDeals(); })
   );
   $("#f-search").addEventListener("input", () => {
     clearTimeout(window._searchDebounce);
@@ -1092,7 +1143,7 @@ function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (ev) => {
     if ($(".tab-btn.active")?.dataset.tab !== "deals") return;
     if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
-    const rows = $$("#deal-table-body tr:not(.store-expand-row)");
+    const rows = $$("#deal-list .deal-row");
     if (!rows.length) return;
     let idx = rows.findIndex((r) => r.classList.contains("focused"));
 
@@ -1103,7 +1154,7 @@ function setupKeyboardShortcuts() {
       rows[idx].classList.add("focused");
       rows[idx].scrollIntoView({ block: "nearest" });
     } else if (ev.key === "w" && idx >= 0) {
-      rows[idx].querySelector(".want-btn")?.click();
+      rows[idx].querySelector(".dv-want-btn")?.click();
     } else if (ev.key === "d" && idx >= 0) {
       rows[idx].querySelector(".not-interested-btn")?.click();
     }
