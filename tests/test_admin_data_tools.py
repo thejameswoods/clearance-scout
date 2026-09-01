@@ -99,6 +99,26 @@ def test_recompute_with_override_does_not_resurrect_a_dead_deal(postgres_conn):
     assert _status(postgres_conn, deal_id) == "stale"
 
 
+def test_recompute_does_not_count_or_touch_already_correct_deals(postgres_conn):
+    """Confirmed live 2026-09-01: running the tool a second time with
+    nothing actually wrong reported "updated: 74" for a table that hadn't
+    changed -- the UPDATE matched every non-protected row unconditionally
+    and counted all of them, not just the ones whose status changed."""
+    deal_id = _make_deal(postgres_conn, is_clearance=True)
+    postgres_conn.execute("UPDATE deal SET status = 'active' WHERE id = %s", (deal_id,))
+    before = postgres_conn.execute(
+        "SELECT status, updated_at FROM deal WHERE id = %s", (deal_id,)
+    ).fetchone()
+
+    updated = db.recompute_deal_statuses(postgres_conn, override_manual=False)
+
+    assert updated == 0
+    after = postgres_conn.execute(
+        "SELECT status, updated_at FROM deal WHERE id = %s", (deal_id,)
+    ).fetchone()
+    assert after["updated_at"] == before["updated_at"]  # not touched
+
+
 def test_recompute_without_override_still_reconciles_new_and_active(postgres_conn):
     deal_id = _make_deal(postgres_conn, is_clearance=True)
     postgres_conn.execute("UPDATE deal SET status = 'stale' WHERE id = %s", (deal_id,))

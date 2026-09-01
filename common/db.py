@@ -259,6 +259,8 @@ def recompute_deal_statuses(conn, override_manual: bool = False) -> int:
         FROM price_observation po
         WHERE po.id = d.latest_observation_id
           {protect_clause}
+          AND d.status IS DISTINCT FROM
+              (CASE WHEN po.is_clearance OR po.is_penny THEN 'active' ELSE 'stale' END)
         RETURNING d.id
         """
     ).fetchall()
