@@ -162,6 +162,7 @@ def run_scan(
             store_info.name, store_info.address,
         )
         stores_scanned += 1
+        store_departments_scanned = 0
         logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
         _progress(
             phase="store", store=store_info.name or store_info.retailer_store_id,
@@ -172,6 +173,7 @@ def run_scan(
         for department in departments:
             department_id = department_ids[department.retailer_department_id]
             departments_scanned += 1
+            store_departments_scanned += 1
 
             last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
             cache_is_fresh = (
@@ -205,7 +207,7 @@ def run_scan(
             )
             _progress(
                 phase="prices", department=department.name,
-                department_index=departments_scanned, departments_total=len(departments),
+                department_index=store_departments_scanned, departments_total=len(departments),
                 department_products_total=len(product_refs), department_products_checked=0,
                 products_checked=products_checked, errors_count=errors_count,
             )
@@ -273,7 +275,7 @@ def run_scan(
                     logger.info("Department %r: checked %d/%d so far", department.name, i, len(product_refs))
                     _progress(
                         phase="prices", department=department.name,
-                        department_index=departments_scanned, departments_total=len(departments),
+                        department_index=store_departments_scanned, departments_total=len(departments),
                         department_products_total=len(product_refs), department_products_checked=i,
                         products_checked=products_checked, errors_count=errors_count,
                     )
@@ -285,7 +287,7 @@ def run_scan(
             )
             _progress(
                 phase="prices", department=department.name,
-                department_index=departments_scanned, departments_total=len(departments),
+                department_index=store_departments_scanned, departments_total=len(departments),
                 department_products_total=len(product_refs), department_products_checked=len(product_refs),
                 products_checked=products_checked, errors_count=errors_count,
             )
