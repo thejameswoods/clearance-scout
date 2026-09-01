@@ -463,7 +463,8 @@ function setupScanConfigForm() {
   });
 }
 
-function dataToolsHtml() {
+function dataToolsHtml(missingCount) {
+  const missingLabel = missingCount == null ? "unknown" : missingCount;
   return `
     <h3>Data tools</h3>
     <div class="data-tools">
@@ -481,6 +482,14 @@ function dataToolsHtml() {
           <label class="checkbox-label"><input type="checkbox" id="tool-recompute-override"> Include Bought/Dismissed/Saved (repair only -- can undo a real action)</label>
         </div>
         <button id="tool-recompute" class="danger" type="button">Recompute</button>
+      </div>
+      <div class="data-tool">
+        <div>
+          <strong>Repair missing data</strong>
+          <p class="meta">Backfills image/product-link/aisle/bay for deals missing them (${missingLabel} right now) -- re-fetches from the retailer regardless of whether the item is still on clearance, unlike a normal scan (which only enriches a live hit). Runs on the scanner's real browser session, so it takes a little while and is capped per run.</p>
+          <label>Max items this run <input type="number" id="tool-repair-limit" min="1" step="1" value="50" style="width:80px"></label>
+        </div>
+        <button id="tool-repair" class="secondary" type="button">Repair</button>
       </div>
     </div>
     <p id="data-tools-status" class="meta"></p>
@@ -515,13 +524,56 @@ function setupDataTools() {
       statusEl.textContent = `Failed: ${e.message}`;
     }
   });
+
+  $("#tool-repair").addEventListener("click", async () => {
+    const limit = Number($("#tool-repair-limit").value) || 50;
+    if (!confirm(`Fetch fresh product detail for up to ${limit} deal(s) missing image/link/aisle/bay data? This hits the real retailer API through the scanner's browser session -- it won't run alongside a scan, and it'll pause the next scheduled scan until it's done.`)) return;
+    try {
+      const res = await api(`/api/admin/repair-missing-data?limit=${limit}`, { method: "POST" });
+      if (!res.triggered) {
+        statusEl.textContent = `Failed to start: ${res.error || "unknown error"}`;
+        return;
+      }
+    } catch (e) {
+      statusEl.textContent = `Failed to start: ${e.message}`;
+      return;
+    }
+    statusEl.textContent = "Repairing…";
+    pollRepairStatus(statusEl);
+  });
+}
+
+async function pollRepairStatus(statusEl) {
+  for (let i = 0; i < 200; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    let status;
+    try {
+      status = await api("/api/admin/repair-missing-data/status");
+    } catch (e) {
+      statusEl.textContent = `Lost track of progress: ${e.message}`;
+      return;
+    }
+    if (status.state === "running") continue;
+    const result = status.last_run_result;
+    const summary = result && typeof result === "object"
+      ? Object.values(result)[0]
+      : result;
+    if (summary && typeof summary === "object") {
+      statusEl.textContent = `Done -- attempted ${summary.attempted}, ${summary.images_filled} image(s), ${summary.canonical_filled} link(s), ${summary.aisle_bay_filled} aisle/bay filled, ${summary.errors} still missing.`;
+    } else {
+      statusEl.textContent = `Finished (${summary || "no result"}).`;
+    }
+    return;
+  }
+  statusEl.textContent = "Still running after 10 minutes -- check the Logs tab.";
 }
 
 async function loadSettings() {
-  const [retailers, telegram, scanConfig] = await Promise.all([
+  const [retailers, telegram, scanConfig, missing] = await Promise.all([
     api("/api/settings/retailers"),
     api("/api/settings/telegram"),
     api("/api/settings/scan-config"),
+    api("/api/admin/repair-missing-data/count").catch(() => null),
   ]);
   $("#settings-content").innerHTML = `
     <h3>Scan configuration</h3>
@@ -533,7 +585,7 @@ async function loadSettings() {
       <dt>Alerts sent</dt><dd>${telegram.alerts_sent}</dd>
       <dt>Last alert</dt><dd>${telegram.last_alert_at ? new Date(telegram.last_alert_at).toLocaleString() : "never"}</dd>
     </dl>
-    ${dataToolsHtml()}
+    ${dataToolsHtml(missing ? missing.missing : null)}
   `;
   setupScanConfigForm();
   setupDataTools();

@@ -202,6 +202,23 @@ class RetailerAdapter(ABC):
         available. Returns (aisle, bay)."""
         return (None, None)
 
+    def enrich_batch(
+        self, browser_ctx: Any, store: StoreInfo, product_refs: list[ProductRef],
+    ) -> dict[str, dict[str, Any]]:
+        """Best-effort canonical_url/image_url/aisle/bay lookup for a batch
+        of already-known products at one store, independent of current
+        clearance/penny status -- unlike check_prices()'s enrichment (only
+        a confirmed hit gets enriched, to avoid an API call per product
+        checked), this backs the on-demand "repair missing data" tool, so
+        it deliberately ignores that gate. Only product_ref.retailer_product_id
+        is used -- other ProductRef fields exist for adapter-contract
+        consistency, not because this needs them. Returns
+        {retailer_product_id: {"canonical_url", "image_url", "aisle", "bay"}}
+        -- a product_id absent from the result means enrichment failed for
+        it (caller treats that as "still missing", not an error). Default:
+        not supported."""
+        return {}
+
     @abstractmethod
     def rate_limit_policy(self) -> RateLimitPolicy:
         """This adapter's own pacing/backoff numbers."""

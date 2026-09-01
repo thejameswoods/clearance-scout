@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from adapters.base import Department, NeedsLogin, ProductRef, RetailerAdapter
+from adapters.base import Department, NeedsLogin, ProductRef, RetailerAdapter, StoreInfo
 from common import db
 from scanner.ratelimit import RateLimiter
 
@@ -302,4 +302,89 @@ def run_scan(
         "errors_count": errors_count,
         "new_deal_product_ids": new_deal_ids,
         "browser_ctx": browser_ctx,
+    }
+
+
+def repair_missing_enrichment(
+    conn, browser_ctx, adapter: RetailerAdapter, limit: int | None = None,
+) -> dict:
+    """Backfills image_url/canonical_url/aisle/bay for deals whose product
+    is missing them -- independent of current clearance/penny status,
+    unlike check_prices()'s enrichment (only a confirmed hit gets
+    enriched, deliberately, to avoid an API call per product checked).
+    Two real cases this recovers from: a deal that was only ever a hit
+    before enrichment existed at all, and a deal whose store has since
+    fallen outside the configured ZIP/radius, so a normal scan never
+    reaches it again to re-enrich it as a fresh hit.
+
+    Grouped by store so enrich_batch() gets one batched call per store
+    instead of one round trip per product. `limit` bounds how many deals
+    (across all stores) get attempted in one run -- unset (None) means
+    "quite possibly a lot," so the caller should default to something
+    conservative for an on-demand tool talking to a real retailer API.
+    """
+    targets = db.get_deals_missing_enrichment(conn, limit=limit)
+
+    by_store: dict[str, list[dict]] = {}
+    for row in targets:
+        by_store.setdefault(row["retailer_store_id"], []).append(row)
+
+    attempted = 0
+    images_filled = 0
+    canonical_filled = 0
+    aisle_bay_filled = 0
+    errors = 0
+
+    for retailer_store_id, rows in by_store.items():
+        store = StoreInfo(
+            retailer_store_id=retailer_store_id, zip_code=rows[0]["zip_code"],
+            name=rows[0]["store_name"], address=rows[0]["store_address"],
+        )
+        # department is required by ProductRef but unused by enrich_batch
+        # (only .retailer_product_id is) -- a placeholder avoids a real
+        # department lookup this call has no other use for.
+        placeholder_department = Department(retailer_department_id="", name="")
+        product_refs = [
+            ProductRef(
+                retailer_product_id=row["retailer_product_id"], name=row["product_name"],
+                department=placeholder_department,
+            )
+            for row in rows
+        ]
+
+        try:
+            results = adapter.enrich_batch(browser_ctx, store, product_refs)
+        except Exception:
+            logger.exception(
+                "Repair: enrich_batch failed for store %s (%d product(s))",
+                retailer_store_id, len(rows),
+            )
+            errors += len(rows)
+            continue
+
+        for row in rows:
+            attempted += 1
+            data = results.get(row["retailer_product_id"])
+            if not data:
+                errors += 1
+                continue
+            if data.get("image_url"):
+                images_filled += 1
+            if data.get("canonical_url"):
+                canonical_filled += 1
+            db.repair_product_enrichment(
+                conn, row["product_id"], data.get("canonical_url"), data.get("image_url"),
+            )
+            if data.get("aisle") or data.get("bay"):
+                aisle_bay_filled += 1
+            db.repair_store_product_location(
+                conn, row["product_id"], row["store_id"], data.get("aisle"), data.get("bay"),
+            )
+
+    return {
+        "attempted": attempted,
+        "images_filled": images_filled,
+        "canonical_filled": canonical_filled,
+        "aisle_bay_filled": aisle_bay_filled,
+        "errors": errors,
     }

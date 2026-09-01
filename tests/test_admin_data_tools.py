@@ -204,3 +204,21 @@ def test_reset_department_cache_route(client, postgres_conn):
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "reset": 1}
     assert db.get_department_products_last_listed_at(postgres_conn, dept_id) is None
+
+
+def test_repair_missing_data_count_route(client, postgres_conn):
+    retailer_id = db.upsert_retailer(postgres_conn, "fake_retailer", "Fake Retailer", "https://example.invalid")
+    store_id = db.upsert_store(postgres_conn, retailer_id, "store-1", "00000", "Fake Store", None)
+    department_id = db.upsert_department(postgres_conn, retailer_id, "dept-1", "Widgets", None)
+    product_id = db.upsert_product(postgres_conn, retailer_id, "sku-1", "Test Widget", department_id, None, None)
+    observation_id = db.insert_price_observation(
+        postgres_conn, product_id, store_id, None, datetime.now(timezone.utc),
+        price_cents=999, list_price_cents=None, is_clearance=True, is_penny=False,
+        fulfillment_state="in_stock", stock_quantity=5, raw_signal={},
+    )
+    db.upsert_deal_from_observation(postgres_conn, product_id, store_id, observation_id, is_clearance=True, is_penny=False)
+
+    resp = client.get("/api/admin/repair-missing-data/count")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"missing": 1}  # no image_url/canonical_url/location on this product

@@ -20,7 +20,7 @@ from patchright.sync_api import sync_playwright
 from adapters.registry import build_adapter
 from common import db
 from scanner.log_buffer import RingBufferLogHandler
-from scanner.orchestrator import ScanAbortedNeedsLogin, run_scan
+from scanner.orchestrator import ScanAbortedNeedsLogin, repair_missing_enrichment, run_scan
 from scanner.settings import merge_settings, split_list
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -96,6 +96,15 @@ _status = {"last_scan_started_at": None, "last_scan_result": None, "state": "sta
 # start/end-of-scan summary; cleared at the start of each scan.
 _progress: dict = {}
 
+# The "repair missing data" tool -- a separate trigger/status pair from
+# the scan ones above since it's a genuinely different operation (no
+# department discovery, no price checks), sharing only the same
+# persistent browser_ctx and the same "one operation at a time" main loop.
+_repair_trigger_event = threading.Event()
+_repair_limit: int | None = None
+_repair_status = {"state": "idle", "last_run_result": None}
+DEFAULT_REPAIR_LIMIT = 50  # an on-demand tool hitting a real retailer API -- default to a conservative batch, not "however many are missing."
+
 app = FastAPI(title="clearance-scout scanner (internal)")
 
 
@@ -131,6 +140,26 @@ def trigger_scan(department: str | None = None):
     _trigger_department = department
     _trigger_event.set()
     return {"triggered": True}
+
+
+@app.post("/repair-missing-data")
+def repair_missing_data(limit: int | None = DEFAULT_REPAIR_LIMIT):
+    # limit=0 or a negative value would otherwise slip through to
+    # get_deals_missing_enrichment as "no limit" (Python truthiness on 0
+    # is falsy, but the DB layer checks `is not None`) -- reject instead
+    # of silently running unbounded.
+    if limit is not None and limit <= 0:
+        return {"triggered": False, "error": "limit must be positive (or omitted for DEFAULT_REPAIR_LIMIT)"}
+    global _repair_limit
+    _repair_limit = limit
+    _repair_trigger_event.set()
+    return {"triggered": True}
+
+
+@app.get("/repair-status")
+def repair_status():
+    with _status_lock:
+        return dict(_repair_status)
 
 
 def _run_http_server():
@@ -198,6 +227,31 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
     return browser_ctx
 
 
+def _repair_all(browser_ctx, limit: int | None):
+    with _status_lock:
+        _repair_status["state"] = "running"
+
+    for slug in RETAILERS:
+        adapter = build_adapter(slug)
+        try:
+            with db.get_connection() as conn:
+                result = repair_missing_enrichment(conn, browser_ctx, adapter, limit=limit)
+            logger.info("Repair complete for %s: %s", slug, result)
+            with _status_lock:
+                _repair_status["last_run_result"] = {slug: result}
+        except Exception:
+            # Same posture as _scan_all's except-clause -- never crash the
+            # process over a single bad run.
+            logger.exception("%s repair failed unexpectedly", slug)
+            with _status_lock:
+                _repair_status["last_run_result"] = {slug: "error"}
+
+    with _status_lock:
+        _repair_status["state"] = "idle"
+
+    return browser_ctx
+
+
 def _launch_browser_ctx(playwright):
     # Manual --disable-blink-features / ignore_default_args flags weren't
     # enough (confirmed live: Home Depot's real login API 403'd on the
@@ -251,7 +305,11 @@ def main() -> None:
         while True:
             settings = _current_settings()  # fresh each cycle -- see that function's docstring
             department_filter = None
-            if _trigger_event.is_set():
+            if _repair_trigger_event.is_set():
+                limit = _repair_limit
+                _repair_trigger_event.clear()
+                browser_ctx = _repair_all(browser_ctx, limit)
+            elif _trigger_event.is_set():
                 department_filter = _trigger_department
                 _trigger_event.clear()
                 browser_ctx = _scan_all(
@@ -274,17 +332,19 @@ def main() -> None:
 
             if settings["scan_interval_minutes"] <= 0:
                 # Scheduled auto-rescan disabled -- wait indefinitely for a
-                # manual trigger (dashboard "Scan now" / bot /scan).
-                while not _trigger_event.wait(timeout=5):
-                    pass
+                # manual trigger (dashboard "Scan now" / bot /scan) or a
+                # repair trigger.
+                while not (_trigger_event.is_set() or _repair_trigger_event.is_set()):
+                    time.sleep(5)
                 continue
 
             # Sleep in short increments so a trigger during the wait is
             # picked up promptly instead of after the full interval.
             deadline = time.monotonic() + settings["scan_interval_minutes"] * 60
             while time.monotonic() < deadline:
-                if _trigger_event.wait(timeout=5):
+                if _trigger_event.is_set() or _repair_trigger_event.is_set():
                     break
+                time.sleep(5)
 
 
 if __name__ == "__main__":

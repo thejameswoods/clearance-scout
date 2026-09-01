@@ -421,6 +421,56 @@ class HomeDepotAdapter(RetailerAdapter):
             })))
         return enriched
 
+    def enrich_batch(
+        self, browser_ctx: Any, store: StoreInfo, product_refs: list[ProductRef],
+    ) -> dict[str, dict[str, Any]]:
+        """The repair tool's entry point -- same product_detail_wave +
+        aislebay calls as _enrich_wave_hits, but keyed and returned as a
+        plain dict instead of merged into a PriceObservation, since a
+        repair pass has no observation to attach to (it isn't a price
+        check). Deliberately not gated on clearance/penny status, unlike
+        every other enrichment call site."""
+        if not product_refs:
+            return {}
+        client = HomeDepotApiClient(browser_ctx)
+        item_ids = [ref.retailer_product_id for ref in product_refs]
+        try:
+            details = client.product_detail_wave(store.retailer_store_id, item_ids)
+        except Exception:
+            logger.exception("Repair: batch product_detail failed for %d product(s)", len(product_refs))
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        store_sku_ids: dict[str, str | None] = {}
+        for ref, detail in zip(product_refs, details):
+            if detail.get("error"):
+                logger.info("Repair: product_detail failed for %s: %s", ref.retailer_product_id, detail["error"])
+                continue
+            canonical_url, image_url, store_sku_id = self._parse_product_detail(detail)
+            result[ref.retailer_product_id] = {
+                "canonical_url": canonical_url, "image_url": image_url, "aisle": None, "bay": None,
+            }
+            store_sku_ids[ref.retailer_product_id] = store_sku_id
+
+        sku_to_ref_id = {sku: ref_id for ref_id, sku in store_sku_ids.items() if sku}
+        sku_list = list(sku_to_ref_id.keys())
+        for i in range(0, len(sku_list), 20):
+            sku_chunk = sku_list[i:i + 20]
+            try:
+                ab = client.aislebay(store.retailer_store_id, sku_chunk)
+                store_skus = ((ab.get("data") or {}).get("aislebay") or {}).get("storeSkus") or []
+                for entry in store_skus:
+                    sku = entry.get("storeSkuId")
+                    ref_id = sku_to_ref_id.get(sku)
+                    if ref_id and ref_id in result:
+                        info = entry.get("aisleBayInfo") or {}
+                        result[ref_id]["aisle"] = info.get("aisle")
+                        result[ref_id]["bay"] = info.get("bay")
+            except Exception:
+                logger.exception("Repair: batch aislebay failed for %d SKU(s)", len(sku_chunk))
+
+        return result
+
     @staticmethod
     def _parse_product_detail(detail: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
         """Pure -- pulls (canonical_url, image_url, store_sku_id) out of a
