@@ -21,6 +21,7 @@ from adapters.registry import build_adapter
 from common import db
 from scanner.log_buffer import RingBufferLogHandler
 from scanner.orchestrator import ScanAbortedNeedsLogin, run_scan
+from scanner.settings import merge_settings, split_list
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("clearance_scout.scanner")
@@ -32,35 +33,59 @@ _log_buffer = RingBufferLogHandler(capacity=int(os.environ.get("LOG_BUFFER_CAPAC
 _log_buffer.setFormatter(logging.Formatter("%(message)s"))
 logging.getLogger().addHandler(_log_buffer)
 
-def _split_env_list(name: str) -> list[str] | None:
-    raw = os.environ.get(name, "")
-    values = [s.strip() for s in raw.split(",") if s.strip()]
-    return values or None  # empty/unset means "no filter, scan everything"
-
-
+# RETAILERS/PROFILE_DIR/TRIGGER_PORT are infra-level, not scan config --
+# not exposed as dashboard-editable. ENV_DEFAULTS below is only the
+# *env-var default* set: _current_settings() overlays any override saved
+# from the dashboard's Settings tab on top of it (scanner/settings.py's
+# merge_settings -- kept there, not here, so it's testable without
+# patchright being importable), read fresh on every scan/status check so
+# a saved change takes effect on the next scan without needing a redeploy.
+# See db/init/001_schema.sql's scanner_settings table and common/db.py's
+# get_/upsert_scanner_settings.
 RETAILERS = [s.strip() for s in os.environ.get("RETAILERS", "home_depot").split(",") if s.strip()]
-ZIP_CODE = os.environ["ZIP_CODE"]
-RADIUS_MILES = float(os.environ.get("RADIUS_MILES", "25"))
-WATCHED_DEPARTMENTS = _split_env_list("WATCHED_DEPARTMENTS")
-WATCH_KEYWORDS = _split_env_list("WATCH_KEYWORDS")
-# <= 0 disables the scheduled recurring scan entirely -- "Scan now"
-# (dashboard/bot) still works. Confirmed live 2026-09-01: the 4h interval
-# auto-retriggered a scan mid-development, on a container whose memory
-# hadn't recovered from the previous run, straight into the same
-# multi-hour timeout/degradation issue (GitHub issue #4) it was already
-# fighting. Useful default for production; actively unhelpful while
-# iterating or investigating a specific problem.
-SCAN_INTERVAL_MINUTES = float(os.environ.get("SCAN_INTERVAL_MINUTES", "240"))
-# Every container start otherwise kicks off a full scan immediately, which
-# is right for production (resume after a crash/restart) but actively
-# hostile to iterating on code -- confirmed live 2026-08-31: a normal
-# redeploy re-triggered the same multi-hour scan that had just caused an
-# OOM incident, seconds after the fix for it shipped. Set false while
-# actively developing; "Scan now" (dashboard/bot) still works regardless.
-SCAN_ON_STARTUP = os.environ.get("SCAN_ON_STARTUP", "true").lower() not in ("false", "0", "")
-PRODUCT_LIST_CACHE_HOURS = float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24"))
+ENV_DEFAULTS = {
+    "zip_code": os.environ["ZIP_CODE"],
+    "radius_miles": float(os.environ.get("RADIUS_MILES", "25")),
+    "watched_departments": split_list(os.environ.get("WATCHED_DEPARTMENTS")),
+    "watch_keywords": split_list(os.environ.get("WATCH_KEYWORDS")),
+    # <= 0 disables the scheduled recurring scan entirely -- "Scan now"
+    # (dashboard/bot) still works. Confirmed live 2026-09-01: the 4h
+    # interval auto-retriggered a scan mid-development, on a container
+    # whose memory hadn't recovered from the previous run, straight into
+    # the same multi-hour timeout/degradation issue (GitHub issue #4) it
+    # was already fighting. Useful default for production; actively
+    # unhelpful while iterating or investigating a specific problem.
+    "scan_interval_minutes": float(os.environ.get("SCAN_INTERVAL_MINUTES", "240")),
+    # Every container start otherwise kicks off a full scan immediately,
+    # which is right for production (resume after a crash/restart) but
+    # actively hostile to iterating on code -- confirmed live 2026-08-31:
+    # a normal redeploy re-triggered the same multi-hour scan that had
+    # just caused an OOM incident, seconds after the fix for it shipped.
+    # Set false while actively developing; "Scan now" (dashboard/bot)
+    # still works regardless. NOTE: unlike the other settings, a
+    # dashboard-saved override for this one only takes effect on the
+    # *next container start* -- it's read exactly once, at the top of
+    # main()'s loop, before there's a "next scan" to defer.
+    "scan_on_startup": os.environ.get("SCAN_ON_STARTUP", "true").lower() not in ("false", "0", ""),
+    "product_list_cache_hours": float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24")),
+}
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
 TRIGGER_PORT = int(os.environ.get("TRIGGER_PORT", "8090"))
+
+
+def _current_settings() -> dict:
+    """Env-var defaults (ENV_DEFAULTS) overlaid with whatever's saved in
+    scanner_settings -- called fresh at the start of every scan and by
+    /config, so a change saved from the dashboard applies to the very
+    next scan, no redeploy."""
+    override = None
+    try:
+        with db.get_connection() as conn:
+            override = db.get_scanner_settings(conn)
+    except Exception:
+        logger.exception("Failed to read scanner settings override -- using env-var defaults")
+
+    return merge_settings(ENV_DEFAULTS, override)
 
 _trigger_event = threading.Event()
 _trigger_department: str | None = None
@@ -92,21 +117,12 @@ def logs():
 
 @app.get("/config")
 def config():
-    # Read-only, non-secret runtime config -- feeds the dashboard's
-    # Settings tab so "what is this actually scanning right now" doesn't
-    # require SSHing in and reading .env by hand (confirmed real friction
-    # this session). Nothing here is a credential; TELEGRAM_BOT_TOKEN etc.
-    # never get exposed this way.
-    return {
-        "retailers": RETAILERS,
-        "zip_code": ZIP_CODE,
-        "radius_miles": RADIUS_MILES,
-        "watched_departments": WATCHED_DEPARTMENTS,
-        "watch_keywords": WATCH_KEYWORDS,
-        "scan_interval_minutes": SCAN_INTERVAL_MINUTES,
-        "scan_on_startup": SCAN_ON_STARTUP,
-        "product_list_cache_hours": PRODUCT_LIST_CACHE_HOURS,
-    }
+    # Non-secret runtime config, editable from the dashboard's Settings
+    # tab (see /config PUT below) -- feeds the display so "what is this
+    # actually scanning right now" doesn't require SSHing in and reading
+    # .env by hand (confirmed real friction this session). Nothing here is
+    # a credential; TELEGRAM_BOT_TOKEN etc. never get exposed this way.
+    return {"retailers": RETAILERS, **_current_settings()}
 
 
 @app.post("/trigger-scan")
@@ -131,6 +147,8 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
     """Returns the (possibly recycled) browser_ctx -- run_scan() may swap
     it out mid-scan (see recycle_browser_ctx), so the caller's own
     reference has to be updated from the result, not assumed unchanged."""
+    settings = _current_settings()  # fresh read -- picks up any dashboard-saved change
+
     with _status_lock:
         _status["last_scan_started_at"] = datetime.now(timezone.utc).isoformat()
         _status["state"] = "scanning"
@@ -145,10 +163,10 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
         try:
             with db.get_connection() as conn:
                 result = run_scan(
-                    conn, browser_ctx, adapter, ZIP_CODE, radius_miles=RADIUS_MILES,
+                    conn, browser_ctx, adapter, settings["zip_code"], radius_miles=settings["radius_miles"],
                     trigger=trigger, department_filter=department_filter,
-                    watched_departments=WATCHED_DEPARTMENTS, watch_keywords=WATCH_KEYWORDS,
-                    product_list_cache_hours=PRODUCT_LIST_CACHE_HOURS,
+                    watched_departments=settings["watched_departments"], watch_keywords=settings["watch_keywords"],
+                    product_list_cache_hours=settings["product_list_cache_hours"],
                     recycle_browser_ctx=recycle_browser_ctx,
                     on_progress=_on_progress,
                 )
@@ -231,6 +249,7 @@ def main() -> None:
 
         first_iteration = True
         while True:
+            settings = _current_settings()  # fresh each cycle -- see that function's docstring
             department_filter = None
             if _trigger_event.is_set():
                 department_filter = _trigger_department
@@ -239,9 +258,9 @@ def main() -> None:
                     browser_ctx, trigger="manual", department_filter=department_filter,
                     recycle_browser_ctx=recycle_browser_ctx,
                 )
-            elif first_iteration and not SCAN_ON_STARTUP:
+            elif first_iteration and not settings["scan_on_startup"]:
                 logger.info(
-                    "SCAN_ON_STARTUP=false -- skipping the immediate scan; "
+                    "scan_on_startup=false -- skipping the immediate scan; "
                     "waiting for a manual trigger or the next scheduled interval"
                 )
                 with _status_lock:
@@ -253,7 +272,7 @@ def main() -> None:
                 )
             first_iteration = False
 
-            if SCAN_INTERVAL_MINUTES <= 0:
+            if settings["scan_interval_minutes"] <= 0:
                 # Scheduled auto-rescan disabled -- wait indefinitely for a
                 # manual trigger (dashboard "Scan now" / bot /scan).
                 while not _trigger_event.wait(timeout=5):
@@ -262,7 +281,7 @@ def main() -> None:
 
             # Sleep in short increments so a trigger during the wait is
             # picked up promptly instead of after the full interval.
-            deadline = time.monotonic() + SCAN_INTERVAL_MINUTES * 60
+            deadline = time.monotonic() + settings["scan_interval_minutes"] * 60
             while time.monotonic() < deadline:
                 if _trigger_event.wait(timeout=5):
                     break

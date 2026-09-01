@@ -133,3 +133,21 @@ CREATE TABLE credential_session (
                       CHECK (status IN ('valid', 'expired', 'needs_login')),
     UNIQUE (retailer_id, session_label)
 );
+
+-- Editable overrides for the scanner's env-var config -- lets the
+-- dashboard change ZIP/radius/watch filters/timing without a redeploy.
+-- Single row (id always 1); NULL means "no override, use the env var
+-- default" for that field specifically, not "use NULL as the value" --
+-- see common/db.py's get_scanner_settings/upsert_scanner_settings and
+-- scanner/main.py's _current_settings for how env + this table merge.
+CREATE TABLE scanner_settings (
+    id                       INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    zip_code                 TEXT,
+    radius_miles             DOUBLE PRECISION,
+    watched_departments      TEXT,  -- comma-separated, same format as the env var
+    watch_keywords           TEXT,
+    scan_interval_minutes    DOUBLE PRECISION,
+    scan_on_startup          BOOLEAN,
+    product_list_cache_hours DOUBLE PRECISION,
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);

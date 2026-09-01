@@ -415,28 +415,63 @@ async function loadFilterOptions() {
   });
 }
 
+function scanConfigFormHtml(scanConfig) {
+  const joined = (arr) => (arr && arr.length ? arr.join(", ") : "");
+  return `
+    <form id="scan-config-form" class="settings-form">
+      <label>Retailers <input type="text" value="${escapeHtml((scanConfig.retailers || []).join(", "))}" disabled title="Not yet editable from here -- set via RETAILERS in .env"></label>
+      <label>ZIP code <input type="text" id="cfg-zip" value="${escapeHtml(scanConfig.zip_code || "")}" required></label>
+      <label>Radius (miles) <input type="number" id="cfg-radius" min="1" step="0.5" value="${scanConfig.radius_miles ?? ""}" required></label>
+      <label>Watched departments <input type="text" id="cfg-departments" placeholder="blank = all departments" value="${escapeHtml(joined(scanConfig.watched_departments))}"></label>
+      <label>Watch keywords <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml(joined(scanConfig.watch_keywords))}"></label>
+      <label>Scan interval (min, 0 = manual only) <input type="number" id="cfg-interval" min="0" step="1" value="${scanConfig.scan_interval_minutes ?? ""}"></label>
+      <label class="checkbox-label"><input type="checkbox" id="cfg-startup" ${scanConfig.scan_on_startup ? "checked" : ""}> Scan on container startup <span class="meta">(takes effect on next restart, not this save)</span></label>
+      <label>Product list cache (hours) <input type="number" id="cfg-cache-hours" min="0" step="1" value="${scanConfig.product_list_cache_hours ?? ""}"></label>
+      <div class="modal-actions">
+        <button type="submit">Save</button>
+        <span id="scan-config-save-status" class="meta"></span>
+      </div>
+    </form>
+  `;
+}
+
+function setupScanConfigForm() {
+  const form = $("#scan-config-form");
+  if (!form) return;
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const statusEl = $("#scan-config-save-status");
+    statusEl.textContent = "Saving…";
+    try {
+      await api("/api/settings/scan-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          zip_code: $("#cfg-zip").value.trim(),
+          radius_miles: Number($("#cfg-radius").value),
+          watched_departments: $("#cfg-departments").value.trim(),
+          watch_keywords: $("#cfg-keywords").value.trim(),
+          scan_interval_minutes: Number($("#cfg-interval").value),
+          scan_on_startup: $("#cfg-startup").checked,
+          product_list_cache_hours: Number($("#cfg-cache-hours").value),
+        }),
+      });
+      statusEl.textContent = "Saved -- takes effect on the next scan.";
+    } catch (e) {
+      statusEl.textContent = `Save failed: ${e.message}`;
+    }
+  });
+}
+
 async function loadSettings() {
   const [retailers, telegram, scanConfig] = await Promise.all([
     api("/api/settings/retailers"),
     api("/api/settings/telegram"),
     api("/api/settings/scan-config"),
   ]);
-  const listOrAll = (arr) => (arr && arr.length ? arr.join(", ") : "All (no filter)");
   $("#settings-content").innerHTML = `
     <h3>Scan configuration</h3>
-    ${scanConfig.error
-      ? `<p class="meta">${escapeHtml(scanConfig.error)}</p>`
-      : `<dl>
-          <dt>Retailers</dt><dd>${escapeHtml((scanConfig.retailers || []).join(", "))}</dd>
-          <dt>ZIP code</dt><dd>${escapeHtml(scanConfig.zip_code)}</dd>
-          <dt>Radius</dt><dd>${scanConfig.radius_miles} miles</dd>
-          <dt>Watched departments</dt><dd>${escapeHtml(listOrAll(scanConfig.watched_departments))}</dd>
-          <dt>Watch keywords</dt><dd>${escapeHtml(listOrAll(scanConfig.watch_keywords))}</dd>
-          <dt>Scan interval</dt><dd>${scanConfig.scan_interval_minutes > 0 ? scanConfig.scan_interval_minutes + " min" : "Disabled (manual trigger only)"}</dd>
-          <dt>Scan on startup</dt><dd>${scanConfig.scan_on_startup ? "Yes" : "No (dev mode -- trigger manually)"}</dd>
-          <dt>Product list cache</dt><dd>${scanConfig.product_list_cache_hours} hours</dd>
-        </dl>`
-    }
+    ${scanConfig.error ? `<p class="meta">${escapeHtml(scanConfig.error)}</p>` : scanConfigFormHtml(scanConfig)}
     <h3>Retailers</h3>
     <ul>${retailers.map((r) => `<li>${r.display_name} (${r.slug})</li>`).join("") || "<li>None configured yet</li>"}</ul>
     <h3>Telegram</h3>
@@ -445,6 +480,7 @@ async function loadSettings() {
       <dt>Last alert</dt><dd>${telegram.last_alert_at ? new Date(telegram.last_alert_at).toLocaleString() : "never"}</dd>
     </dl>
   `;
+  setupScanConfigForm();
 }
 
 function escapeHtml(value) {

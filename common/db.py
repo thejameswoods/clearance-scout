@@ -242,3 +242,44 @@ def set_credential_session_status(conn, retailer_id: int, status: str, session_l
         """,
         (retailer_id, session_label, status),
     )
+
+
+# --- editable scanner settings (dashboard overrides of env-var config) ------
+
+SCANNER_SETTINGS_FIELDS = (
+    "zip_code", "radius_miles", "watched_departments", "watch_keywords",
+    "scan_interval_minutes", "scan_on_startup", "product_list_cache_hours",
+)
+
+
+def get_scanner_settings(conn) -> dict[str, Any] | None:
+    """The single settings-override row, or None if nothing's ever been
+    saved from the dashboard -- callers (scanner/main.py's
+    _current_settings) fall back to env-var defaults for a None field
+    within the row, and for a None row entirely."""
+    return conn.execute(
+        f"SELECT {', '.join(SCANNER_SETTINGS_FIELDS)} FROM scanner_settings WHERE id = 1"
+    ).fetchone()
+
+
+def upsert_scanner_settings(conn, **fields: Any) -> None:
+    """Only the keys actually passed get written -- an omitted field
+    leaves whatever's already stored (or NULL/"use the env default") for
+    it untouched, rather than every save having to resend the full set."""
+    unknown = set(fields) - set(SCANNER_SETTINGS_FIELDS)
+    if unknown:
+        raise ValueError(f"upsert_scanner_settings: unknown field(s) {unknown}")
+    if not fields:
+        return
+
+    columns = list(fields.keys())
+    conn.execute(
+        f"""
+        INSERT INTO scanner_settings (id, {", ".join(columns)}, updated_at)
+        VALUES (1, {", ".join(["%s"] * len(columns))}, now())
+        ON CONFLICT (id) DO UPDATE SET
+            {", ".join(f"{c} = EXCLUDED.{c}" for c in columns)},
+            updated_at = now()
+        """,
+        list(fields.values()),
+    )
