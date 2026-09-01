@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from web.backend.routes import deals, logs, scan, settings, vnc
+from web.backend.routes import admin, deals, logs, scan, settings, vnc
 
 app = FastAPI(title="Clearance Scout")
 
@@ -19,6 +19,7 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
+app.include_router(admin.router)
 app.include_router(deals.router)
 app.include_router(logs.router)
 app.include_router(scan.router)

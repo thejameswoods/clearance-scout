@@ -232,6 +232,64 @@ def record_rate_limit_event(conn, retailer_id: int, event_type: str, detail: str
     )
 
 
+# --- data repair tools (Settings tab's "Data tools" section) ----------------
+
+def recompute_deal_statuses(conn, override_manual: bool = False) -> int:
+    """Re-derives each deal's status from its latest observation's
+    is_clearance/is_penny -- the same reconciliation
+    upsert_deal_from_observation does live during a scan, run on demand to
+    repair drift (e.g. confirmed live 2026-09-01: a direct DB write outside
+    the app set 63 deals to 'dismissed' with no corresponding app-level
+    action in the web container's logs).
+
+    override_manual=False (the default, safe to run anytime) leaves
+    'bought'/'dismissed'/'saved' alone, same protection
+    upsert_deal_from_observation gives them on a normal scan -- it only
+    reconciles 'new'/'active'/'stale' drift. override_manual=True also
+    rewrites those three; only for deliberate repair of data known to be
+    wrong, since it can undo a real user action indistinguishably from an
+    erroneous one.
+    """
+    protect_clause = "" if override_manual else "AND d.status NOT IN ('bought', 'dismissed', 'saved')"
+    rows = conn.execute(
+        f"""
+        UPDATE deal d
+        SET status = CASE WHEN po.is_clearance OR po.is_penny THEN 'active' ELSE 'stale' END,
+            updated_at = now()
+        FROM price_observation po
+        WHERE po.id = d.latest_observation_id
+          {protect_clause}
+        RETURNING d.id
+        """
+    ).fetchall()
+    return len(rows)
+
+
+def reset_department_product_cache(conn, retailer_slug: str | None = None) -> int:
+    """Nulls products_last_listed_at so the next scan re-lists products for
+    these departments from the retailer instead of serving the product-ID
+    cache (scanner/orchestrator.py's cache_is_fresh gate) -- needed because
+    that cache has no upper bound by default (product_list_cache_hours),
+    so a department never rediscovers new products on its own. Confirmed
+    live 2026-09-01: 266 products were invisible to the scanner this way
+    until this same reset was run by hand via psql."""
+    if retailer_slug:
+        rows = conn.execute(
+            """
+            UPDATE department d SET products_last_listed_at = NULL
+            FROM retailer r
+            WHERE d.retailer_id = r.id AND r.slug = %s
+            RETURNING d.id
+            """,
+            (retailer_slug,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "UPDATE department SET products_last_listed_at = NULL RETURNING id"
+        ).fetchall()
+    return len(rows)
+
+
 def set_credential_session_status(conn, retailer_id: int, status: str, session_label: str = "default") -> None:
     conn.execute(
         """

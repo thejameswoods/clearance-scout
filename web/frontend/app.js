@@ -463,6 +463,60 @@ function setupScanConfigForm() {
   });
 }
 
+function dataToolsHtml() {
+  return `
+    <h3>Data tools</h3>
+    <div class="data-tools">
+      <div class="data-tool">
+        <div>
+          <strong>Force product re-list</strong>
+          <p class="meta">Clears the product-list cache for every department so the next scan re-lists from the retailer instead of serving cached SKUs -- use if new products stop showing up (see "Product list cache" above).</p>
+        </div>
+        <button id="tool-relist" class="secondary" type="button">Reset cache</button>
+      </div>
+      <div class="data-tool">
+        <div>
+          <strong>Recompute deal statuses</strong>
+          <p class="meta">Re-derives Active/Stale from each deal's latest price check. Leaves Bought/Dismissed/Saved alone unless the box below is checked.</p>
+          <label class="checkbox-label"><input type="checkbox" id="tool-recompute-override"> Include Bought/Dismissed/Saved (repair only -- can undo a real action)</label>
+        </div>
+        <button id="tool-recompute" class="danger" type="button">Recompute</button>
+      </div>
+    </div>
+    <p id="data-tools-status" class="meta"></p>
+  `;
+}
+
+function setupDataTools() {
+  const statusEl = $("#data-tools-status");
+
+  $("#tool-relist").addEventListener("click", async () => {
+    if (!confirm("Clear the product-list cache for every department? The next scan re-lists products from scratch instead of using the cache (slower, more requests to the retailer).")) return;
+    statusEl.textContent = "Resetting…";
+    try {
+      const res = await api("/api/admin/reset-department-cache", { method: "POST" });
+      statusEl.textContent = `Done -- ${res.reset} department(s) will re-list on the next scan.`;
+    } catch (e) {
+      statusEl.textContent = `Failed: ${e.message}`;
+    }
+  });
+
+  $("#tool-recompute").addEventListener("click", async () => {
+    const override = $("#tool-recompute-override").checked;
+    const msg = override
+      ? "Recompute ALL deal statuses from their latest price check, including Bought/Dismissed/Saved? This can undo a real action someone took on purpose."
+      : "Recompute Active/Stale deal statuses from each deal's latest price check?";
+    if (!confirm(msg)) return;
+    statusEl.textContent = "Recomputing…";
+    try {
+      const res = await api(`/api/admin/recompute-deal-statuses?override_manual=${override}`, { method: "POST" });
+      statusEl.textContent = `Done -- ${res.updated} deal(s) updated.`;
+    } catch (e) {
+      statusEl.textContent = `Failed: ${e.message}`;
+    }
+  });
+}
+
 async function loadSettings() {
   const [retailers, telegram, scanConfig] = await Promise.all([
     api("/api/settings/retailers"),
@@ -479,8 +533,10 @@ async function loadSettings() {
       <dt>Alerts sent</dt><dd>${telegram.alerts_sent}</dd>
       <dt>Last alert</dt><dd>${telegram.last_alert_at ? new Date(telegram.last_alert_at).toLocaleString() : "never"}</dd>
     </dl>
+    ${dataToolsHtml()}
   `;
   setupScanConfigForm();
+  setupDataTools();
 }
 
 function escapeHtml(value) {
