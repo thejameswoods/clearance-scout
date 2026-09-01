@@ -84,6 +84,13 @@ def test_department_tree_rolls_counts_up_to_ancestors(postgres_conn):
     assert by_name["Electrical"]["count"] == 1             # rolled up from child
     assert by_name["Electrical"]["depth"] == 0
     assert by_name["Electrical Batteries"]["depth"] == 1
+    # Confirmed live 2026-09-01: this field was computed internally (for
+    # the rollup above) but never included in the returned dict, so the
+    # frontend's collapse-by-default logic (which walks d.parent) silently
+    # always saw undefined and rendered every department tree fully
+    # expanded, department.parent_department_id-blind or not.
+    assert by_name["Electrical"]["parent"] is None
+    assert by_name["Electrical Batteries"]["parent"] == "Electrical"
 
 
 def test_department_tree_scoped_to_one_store(postgres_conn):

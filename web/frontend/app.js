@@ -634,7 +634,11 @@ function renderRetailerTree(retailers) {
   const el = $("#retailer-tree");
   el.innerHTML = "";
   for (const r of retailers) {
-    const expanded = r.slug === scope.retailerSlug || localStorage.getItem(retailerExpandKey(r.slug)) === "1";
+    // Expansion is purely the toggle's own state -- independent of
+    // selection, and defaults to collapsed (nothing in localStorage yet).
+    // Selecting a retailer (clicking its name, not the toggle) scopes to
+    // "all stores" for it directly; there's no separate "All N stores" row.
+    const expanded = localStorage.getItem(retailerExpandKey(r.slug)) === "1";
     const isSelectedRetailer = r.slug === scope.retailerSlug;
 
     const retailerRow = document.createElement("div");
@@ -648,12 +652,6 @@ function renderRetailerTree(retailers) {
     retailerRow.addEventListener("click", () => selectRetailer(r.slug));
     el.appendChild(retailerRow);
     if (!expanded) continue;
-
-    const allRow = document.createElement("div");
-    allRow.className = `tree-row indent ${isSelectedRetailer && !scope.storeId ? "selected" : ""}`;
-    allRow.innerHTML = `<span class="tree-name">All ${r.stores.length} store${r.stores.length === 1 ? "" : "s"}</span><span class="tree-count">${r.total}</span>`;
-    allRow.addEventListener("click", () => selectRetailer(r.slug));
-    el.appendChild(allRow);
 
     for (const s of r.stores) {
       const storeSelected = isSelectedRetailer && String(scope.storeId) === String(s.store_id);
@@ -713,9 +711,10 @@ function renderDepartmentTree(departments) {
   const el = $("#department-tree");
   el.innerHTML = "";
   for (const d of departments) {
+    if (d.count === 0) continue; // an empty department is never useful to browse into
     if (visibleNames && !visibleNames.has(d.name)) continue;
     if (isCollapsed(d)) continue;
-    const hasChildren = departments.some((x) => x.parent === d.name);
+    const hasChildren = departments.some((x) => x.parent === d.name && x.count > 0);
     const expanded = !!filterText || localStorage.getItem(deptExpandKey(d.name)) === "1";
     const selected = String(scope.departmentId) === String(d.id);
 

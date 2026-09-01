@@ -250,6 +250,7 @@ def department_tree_with_counts(conn, retailer_slug: str, store_id: int | None =
         {
             "id": id_by_name.get(node["name"]),
             "name": node["name"], "label": node["label"], "depth": node["depth"],
+            "parent": node["parent"],
             "count": total_counts.get(node["name"], 0),
         }
         for node in hierarchy
