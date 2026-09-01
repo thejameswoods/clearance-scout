@@ -225,6 +225,99 @@ def upsert_deal_from_observation(conn, product_id: int, store_id: int, observati
         return row["id"], True
 
 
+# --- dispositions: dismiss (product-level) / defer ("not yet") --------------
+
+def dismiss_product(conn, product_id: int) -> None:
+    """"Not interested" — product-level and permanent, across every store
+    (unlike deal.status, which is per product+store). product.dismissed_at
+    is the authoritative flag list_deals checks (so a future deal row for
+    this product at a store it hasn't been seen at yet still stays
+    hidden); every EXISTING deal row also gets status='dismissed' so
+    History (which still reads deal.status, unchanged by this feature)
+    keeps showing it -- a dual-write, not a redundancy."""
+    conn.execute("UPDATE product SET dismissed_at = now() WHERE id = %s", (product_id,))
+    conn.execute(
+        "UPDATE deal SET status = 'dismissed', updated_at = now() WHERE product_id = %s AND status != 'dismissed'",
+        (product_id,),
+    )
+
+
+def undismiss_product(conn, product_id: int) -> None:
+    """Undo for dismiss_product -- the Deals page's "undo" affordance.
+    Existing deal rows go back to 'new' rather than whatever they were
+    before (not tracked) -- reasonable for an immediate-undo action; a
+    stale one will correct itself on the next scan regardless."""
+    conn.execute("UPDATE product SET dismissed_at = NULL WHERE id = %s", (product_id,))
+    conn.execute(
+        "UPDATE deal SET status = 'new', updated_at = now() WHERE product_id = %s AND status = 'dismissed'",
+        (product_id,),
+    )
+
+
+def defer_deal(conn, deal_id: int, defer_type: str, defer_value: float | None) -> None:
+    """"Not yet" — removes this one product+store row from the active feed
+    until defer_rule is satisfied (see reactivate_satisfied_defers, run
+    once per scan)."""
+    import json
+
+    if defer_type not in ("discount_pct", "price", "penny"):
+        raise ValueError(f"defer_deal: unknown defer_type {defer_type!r}")
+    conn.execute(
+        "UPDATE deal SET status = 'deferred', defer_rule = %s, updated_at = now() WHERE id = %s",
+        (json.dumps({"type": defer_type, "value": defer_value}), deal_id),
+    )
+
+
+def undefer_deal(conn, deal_id: int) -> None:
+    """The "Change" action on a deferred deal -- clears it back to 'new'
+    without waiting for the rule to be satisfied."""
+    conn.execute(
+        "UPDATE deal SET status = 'new', defer_rule = NULL, updated_at = now() WHERE id = %s",
+        (deal_id,),
+    )
+
+
+def reactivate_satisfied_defers(conn) -> int:
+    """Run once at the end of every scan (scanner/orchestrator.py's
+    run_scan). A deferred deal's threshold is evaluated against the most
+    recent observation at EVERY store of that product, not just the store
+    it was deferred at -- "Waiting for a deeper cut" on one store's price
+    should still catch a different store hitting the threshold first (the
+    design doc: "returns as new... at any store where it's met"). Scoped
+    to only products that actually have a deferred deal, not a full
+    price_observation scan."""
+    rows = conn.execute(
+        """
+        WITH latest_per_store AS (
+            SELECT DISTINCT ON (po.product_id, po.store_id)
+                po.product_id, po.store_id, po.price_cents, po.list_price_cents, po.is_penny
+            FROM price_observation po
+            WHERE po.product_id IN (SELECT product_id FROM deal WHERE status = 'deferred')
+            ORDER BY po.product_id, po.store_id, po.observed_at DESC
+        )
+        UPDATE deal d
+        SET status = 'new', defer_rule = NULL, updated_at = now()
+        WHERE d.status = 'deferred'
+          AND d.defer_rule IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM latest_per_store lps
+              WHERE lps.product_id = d.product_id
+                AND (
+                    (d.defer_rule->>'type' = 'penny' AND lps.is_penny)
+                    OR (d.defer_rule->>'type' = 'price'
+                        AND lps.price_cents <= (d.defer_rule->>'value')::numeric * 100)
+                    OR (d.defer_rule->>'type' = 'discount_pct'
+                        AND lps.list_price_cents > 0
+                        AND (100.0 * (lps.list_price_cents - lps.price_cents) / lps.list_price_cents)
+                            >= (d.defer_rule->>'value')::numeric)
+                )
+          )
+        RETURNING d.id
+        """
+    ).fetchall()
+    return len(rows)
+
+
 def record_rate_limit_event(conn, retailer_id: int, event_type: str, detail: str | None) -> None:
     conn.execute(
         "INSERT INTO rate_limit_event (retailer_id, event_type, detail) VALUES (%s, %s, %s)",

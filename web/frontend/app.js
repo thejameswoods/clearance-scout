@@ -78,37 +78,54 @@ function dealCard(d) {
   return el;
 }
 
+function cheapestRow(rows) {
+  return rows.reduce((best, r) => (best == null || r.price_cents < best.price_cents ? r : best), null);
+}
+
+const LAST_VISIT_KEY = "deals_last_visit_at";
+
 async function loadDeals() {
   const params = new URLSearchParams();
   const search = $("#f-search").value.trim();
-  const rootSel = $("#f-department-root");
-  const leafSel = $("#f-department-leaf");
-  const store = $("#f-store").value;
-  const clearanceOnly = $("#f-clearance").checked;
-  const pennyOnly = $("#f-penny").checked;
-  const minDiscount = $("#f-min-discount").value;
-  const sort = $("#f-sort").value;
-
   if (search) params.set("search", search);
-  // Cascading department filter: a specific leaf picked -> exact
-  // department_id match. Only a root picked (leaf left on "All in this
-  // department") -> department_prefix, matching the root itself plus
-  // every real sub-department under it (see build_department_hierarchy /
-  // list_deals's department_prefix handling).
-  if (leafSel.value) {
-    params.set("department_id", leafSel.value);
-  } else if (rootSel.value) {
-    params.set("department_prefix", rootSel.selectedOptions[0].textContent.trim());
-  }
-  if (store) params.set("store_id", store);
-  if (clearanceOnly) params.set("clearance_only", "true");
-  if (pennyOnly) params.set("penny_only", "true");
-  if (minDiscount) params.set("min_discount_pct", minDiscount);
-  params.set("sort", sort);
 
-  const deals = await api(`/api/deals?${params.toString()}`);
-  window._dealGroups = groupByProduct(deals);
+  if (scope.retailerSlug) params.set("retailer", scope.retailerSlug);
+  if (scope.storeId) params.set("store_id", scope.storeId);
+  if (scope.departmentId) {
+    if (scope.includeDescendants && scope.departmentName) params.set("department_prefix", scope.departmentName);
+    else params.set("department_id", scope.departmentId);
+  }
+  (STATUS_PARAMS[scope.statusFilter] || STATUS_PARAMS.active).forEach((s) => params.append("status", s));
+
+  if ($("#f-clearance").checked) params.set("clearance_only", "true");
+  if ($("#f-penny").checked) params.set("penny_only", "true");
+  const minDiscount = $("#f-min-discount").value;
+  if (minDiscount) params.set("min_discount_pct", minDiscount);
+  const priceMin = $("#f-price-min").value;
+  if (priceMin) params.set("price_min_cents", String(Math.round(Number(priceMin) * 100)));
+  const priceMax = $("#f-price-max").value;
+  if (priceMax) params.set("price_max_cents", String(Math.round(Number(priceMax) * 100)));
+  if ($("#f-in-stock").checked) params.set("in_stock_only", "true");
+  params.set("sort", $("#f-sort").value);
+
+  const allDeals = await api(`/api/deals?${params.toString()}`);
+  const lastVisit = localStorage.getItem(LAST_VISIT_KEY);
+  const newCount = lastVisit ? allDeals.filter((d) => d.created_at > lastVisit).length : 0;
+  const displayDeals = (window._triageNewOnly && lastVisit)
+    ? allDeals.filter((d) => d.created_at > lastVisit)
+    : allDeals;
+
+  window._dealGroups = groupByProduct(displayDeals);
   renderDealsTable(window._dealGroups);
+  renderNewBar({ newCount, total: allDeals.length, triageActive: window._triageNewOnly && !!lastVisit });
+}
+
+function renderStoreLineHtml(productId, rows) {
+  if (rows.length === 1) {
+    const r = rows[0];
+    return `${escapeHtml(r.store_name || r.retailer_store_id)}${r.aisle ? ` · Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""}`;
+  }
+  return `<span class="store-expand-toggle" data-toggle-for="${productId}">▾ ${rows.length} stores</span>`;
 }
 
 function renderDealsTable(groups) {
@@ -119,44 +136,223 @@ function renderDealsTable(groups) {
 
   for (const [productId, rows] of groups) {
     const first = rows[0];
+    const cheapest = cheapestRow(rows);
     const addedAt = rows.reduce((min, r) => (r.created_at < min ? r.created_at : min), first.created_at);
+    const isDeferred = rows.every((r) => r.status === "deferred");
+
     const tr = document.createElement("tr");
+    tr.dataset.product = productId;
     tr.innerHTML = `
       <td>${first.image_url ? `<img class="thumb" src="${first.image_url}" alt="">` : ""}</td>
       <td>
-        <div class="product-name">${escapeHtml(first.product_name)}</div>
-        ${first.department_name ? `<div class="product-dept">${escapeHtml(first.department_name)}</div>` : ""}
+        <div class="product-name">
+          <a href="${cheapest.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(first.product_name)}</a>
+          ${rows.length > 1 ? `<span class="product-dept">↗ ${escapeHtml(cheapest.retailer_store_id || "")}</span>` : ""}
+        </div>
+        <div class="product-dept">${first.department_name ? escapeHtml(first.department_name) + " · " : ""}SKU ${escapeHtml(first.retailer_product_id)}</div>
+        ${isDeferred ? `<div class="deferred-note">${deferredNoteText(cheapest)}</div>` : ""}
       </td>
-      <td>${priceRangeText(rows)}</td>
+      <td class="store-line">${renderStoreLineHtml(productId, rows)}</td>
+      <td>${priceRangeText(rows)}${first.list_price_cents ? `<div class="product-dept" style="text-decoration:line-through">${money(first.list_price_cents)}</div>` : ""}</td>
+      <td class="detected-col">
+        <div class="relative">${relTime(addedAt)}</div>
+        <div class="absolute">${new Date(addedAt).toLocaleString()}</div>
+      </td>
       <td>${discountBadge(rows)}</td>
-      <td>${relTime(addedAt)}</td>
-      <td>${rows.length} Store${rows.length === 1 ? "" : "s"}</td>
-      <td class="action-col">
-        <button class="save-btn" data-product="${productId}">Save</button>
-        <button class="secondary share-btn" data-product="${productId}">Share Link</button>
+      <td class="action-col" style="position:relative">
+        ${isDeferred ? `
+          <button class="secondary undefer-btn" data-deal="${cheapest.deal_id}">Change</button>
+          <button class="secondary not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Never</button>
+        ` : `
+          <div class="split-btn">
+            <button class="want-btn" data-deal="${cheapest.deal_id}">Want</button>
+            <button class="secondary not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Not interested</button>
+            <button class="secondary not-yet-caret" data-deal="${cheapest.deal_id}" data-product-name="${escapeHtml(first.product_name)}" type="button">▾</button>
+          </div>
+        `}
       </td>
     `;
     tr.addEventListener("click", (ev) => {
-      if (ev.target.closest("button")) return;
+      if (ev.target.closest("button, a, .store-expand-toggle")) return;
       openProductDetail(productId);
     });
     body.appendChild(tr);
+
+    if (rows.length > 1) {
+      const expandRow = document.createElement("tr");
+      expandRow.className = "store-expand-row";
+      expandRow.hidden = true;
+      expandRow.dataset.expandFor = productId;
+      const cell = document.createElement("td");
+      cell.colSpan = 7;
+      cell.innerHTML = rows
+        .slice()
+        .sort((a, b) => a.price_cents - b.price_cents)
+        .map(
+          (r) => `
+          <div class="store-expand-item">
+            <span><a href="${r.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
+              ${r.aisle ? `· Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""} · detected ${relTime(r.created_at)}</span>
+            <span>${money(r.price_cents)}</span>
+            <button class="secondary add-store-btn" data-deal="${r.deal_id}">Add to this store's list</button>
+          </div>`
+        )
+        .join("");
+      expandRow.appendChild(cell);
+      body.appendChild(expandRow);
+    }
   }
 
-  body.querySelectorAll(".save-btn").forEach((btn) =>
+  wireDealRowActions(body);
+}
+
+function deferredNoteText(row) {
+  const rule = row.defer_rule;
+  if (!rule) return "";
+  if (rule.type === "penny") return "Waiting for penny status.";
+  if (rule.type === "price") return `Waiting for price to drop below ${money(Math.round(rule.value * 100))}.`;
+  return `Waiting for ≥${rule.value}% off.`;
+}
+
+function wireDealRowActions(body) {
+  body.querySelectorAll(".store-expand-toggle").forEach((el) =>
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const row = body.querySelector(`tr.store-expand-row[data-expand-for="${el.dataset.toggleFor}"]`);
+      if (row) row.hidden = !row.hidden;
+    })
+  );
+  body.querySelectorAll(".want-btn, .add-store-btn").forEach((btn) =>
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
-      const rows = window._dealGroups.get(Number(btn.dataset.product));
-      await Promise.all(rows.map((r) => api(`/api/deals/${r.deal_id}/save`, { method: "POST" })));
-      refreshActiveTab();
+      await api(`/api/deals/${btn.dataset.deal}/save`, { method: "POST" });
+      loadDeals();
     })
   );
-  body.querySelectorAll(".share-btn").forEach((btn) =>
+  body.querySelectorAll(".not-interested-btn").forEach((btn) =>
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const productId = btn.dataset.product;
+      await api(`/api/products/${productId}/dismiss`, { method: "POST" });
+      recordLastAction({ type: "dismiss", productId, label: `dismissed: ${btn.dataset.name}` });
+      loadDeals();
+      loadTree();
+    })
+  );
+  body.querySelectorAll(".undefer-btn").forEach((btn) =>
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/deals/${btn.dataset.deal}/undefer`, { method: "POST" });
+      loadDeals();
+      loadTree();
+    })
+  );
+  body.querySelectorAll(".not-yet-caret").forEach((btn) =>
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      shareProductLink(Number(btn.dataset.product));
+      toggleNotYetPanel(btn);
     })
   );
+}
+
+function toggleNotYetPanel(caretBtn) {
+  const existing = document.querySelector(".not-yet-panel");
+  const wasOpenForThis = existing && existing.dataset.deal === caretBtn.dataset.deal;
+  closeNotYetPanel();
+  if (wasOpenForThis) return;
+
+  const dealId = caretBtn.dataset.deal;
+  const panel = document.createElement("div");
+  panel.className = "not-yet-panel";
+  panel.dataset.deal = dealId;
+  panel.innerHTML = `
+    <div class="panel-label">Not yet — tell me again when…</div>
+    <label><input type="radio" name="ny-type" value="discount_pct" checked>
+      Discount reaches
+      <select id="ny-discount-select">
+        <option value="70">70%</option><option value="75">75%</option>
+        <option value="80" selected>80%</option><option value="85">85%</option>
+        <option value="90">90%</option>
+      </select> or better
+    </label>
+    <label><input type="radio" name="ny-type" value="price"> Price drops below
+      $<input type="number" id="ny-price" min="0" step="0.01" value="3.00" style="width:70px"></label>
+    <label><input type="radio" name="ny-type" value="penny"> It hits penny status</label>
+    <label><input type="radio" name="ny-type" value="never"> Never — hide this product for good</label>
+    <div class="modal-actions">
+      <button id="ny-set" type="button">Set threshold</button>
+      <button id="ny-cancel" class="secondary" type="button">Cancel</button>
+    </div>
+    <div class="footnote">Row leaves the feed and returns as new only if the threshold is met — at any store where it's met.</div>
+  `;
+  caretBtn.classList.add("open");
+  caretBtn.closest("td").appendChild(panel);
+  panel.addEventListener("click", (ev) => ev.stopPropagation());
+
+  panel.querySelector("#ny-cancel").addEventListener("click", closeNotYetPanel);
+  panel.querySelector("#ny-set").addEventListener("click", async () => {
+    const type = panel.querySelector('input[name="ny-type"]:checked').value;
+    const productName = caretBtn.dataset.productName;
+    if (type === "never") {
+      const productId = caretBtn.closest("tr").dataset.product;
+      await api(`/api/products/${productId}/dismiss`, { method: "POST" });
+      recordLastAction({ type: "dismiss", productId, label: `dismissed: ${productName}` });
+    } else {
+      const value = type === "discount_pct"
+        ? Number(panel.querySelector("#ny-discount-select").value)
+        : type === "price" ? Number(panel.querySelector("#ny-price").value) : null;
+      await api(`/api/deals/${dealId}/defer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, value }),
+      });
+      recordLastAction({ type: "defer", dealId, label: `deferred: ${productName}` });
+    }
+    closeNotYetPanel();
+    loadDeals();
+    loadTree();
+  });
+}
+
+function closeNotYetPanel() {
+  document.querySelectorAll(".not-yet-caret.open").forEach((b) => b.classList.remove("open"));
+  document.querySelectorAll(".not-yet-panel").forEach((p) => p.remove());
+}
+document.addEventListener("click", closeNotYetPanel);
+
+function recordLastAction(action) { window._lastAction = action; }
+
+async function undoLastAction() {
+  const a = window._lastAction;
+  if (!a) return;
+  window._lastAction = null;
+  if (a.type === "dismiss") await api(`/api/products/${a.productId}/undismiss`, { method: "POST" });
+  else if (a.type === "defer") await api(`/api/deals/${a.dealId}/undefer`, { method: "POST" });
+  loadDeals();
+  loadTree();
+}
+
+function renderNewBar({ newCount, total, triageActive }) {
+  const bar = $("#new-bar");
+  if (newCount === 0 && !window._lastAction) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const parts = [];
+  if (newCount > 0) {
+    parts.push(`<span><strong>${newCount} new</strong> · ${total} total</span>`);
+    parts.push(`<button type="button" id="triage-new-btn" class="secondary">${triageActive ? "Show all" : "Triage new only"}</button>`);
+  }
+  if (window._lastAction) {
+    parts.push(`<span class="meta">Last ${escapeHtml(window._lastAction.label)} <button type="button" id="undo-btn" class="secondary">undo</button></span>`);
+  }
+  bar.innerHTML = parts.join("");
+  $("#triage-new-btn")?.addEventListener("click", () => {
+    window._triageNewOnly = !window._triageNewOnly;
+    loadDeals();
+  });
+  $("#undo-btn")?.addEventListener("click", undoLastAction);
 }
 
 function shareProductLink(productId) {
@@ -355,64 +551,230 @@ function closeModal() {
   $("#deal-modal").classList.add("hidden");
 }
 
-// Populates the second ("leaf") department select with everything under
-// the chosen root -- the hierarchy endpoint returns a parent-before-
-// children (DFS) order, so a root's full subtree is just "every row after
-// it, up to the next depth-0 row." Relative depth (dep.depth - rootDepth)
-// keeps the leaf select's own indentation sane regardless of how deep the
-// root itself was (always 0 for a true root, but this stays correct if
-// that ever changes).
-function populateDepartmentLeafOptions(rootId) {
-  const leafSel = $("#f-department-leaf");
-  leafSel.innerHTML = `<option value="">All in this department</option>`;
-  if (!rootId) {
-    leafSel.hidden = true;
-    return;
-  }
-  const all = window._departmentHierarchy || [];
-  const rootIndex = all.findIndex((d) => String(d.id) === String(rootId));
-  if (rootIndex === -1) return;
-  const rootDepth = all[rootIndex].depth || 0;
-  for (let i = rootIndex + 1; i < all.length && (all[i].depth || 0) > rootDepth; i++) {
-    const dep = all[i];
-    const opt = document.createElement("option");
-    opt.value = dep.id;
-    opt.textContent = "\u00A0\u00A0\u00A0\u00A0".repeat((dep.depth || 0) - rootDepth - 1) + (dep.label || dep.name);
-    opt.title = dep.name;
-    leafSel.appendChild(opt);
-  }
-  leafSel.hidden = false;
+// --- Deals page scope: retailer / store / department tree, synced to the
+// URL so a scope is linkable and survives reload (design doc's
+// "Scope changes ... should be reflected in the URL"). -----------------
+
+function defaultScope() {
+  return {
+    retailerSlug: null, storeId: null, departmentId: null, departmentName: null,
+    includeDescendants: true, statusFilter: "active",
+  };
+}
+let scope = defaultScope();
+
+function loadScopeFromUrl() {
+  const p = new URLSearchParams(location.search);
+  scope.retailerSlug = p.get("retailer") || null;
+  scope.storeId = p.get("store_id") || null;
+  scope.departmentId = p.get("department_id") || null;
+  scope.departmentName = p.get("department_name") || null;
+  scope.includeDescendants = p.get("descendants") !== "0";
+  scope.statusFilter = p.get("status") || "active";
 }
 
-async function loadFilterOptions() {
-  const [departments, stores] = await Promise.all([
-    api("/api/settings/departments"),
-    api("/api/settings/stores"),
-  ]);
-  window._departmentHierarchy = departments;
+function saveScopeToUrl() {
+  const p = new URLSearchParams();
+  if (scope.retailerSlug) p.set("retailer", scope.retailerSlug);
+  if (scope.storeId) p.set("store_id", scope.storeId);
+  if (scope.departmentId) {
+    p.set("department_id", scope.departmentId);
+    if (scope.departmentName) p.set("department_name", scope.departmentName);
+  }
+  if (!scope.includeDescendants) p.set("descendants", "0");
+  if (scope.statusFilter !== "active") p.set("status", scope.statusFilter);
+  const qs = p.toString();
+  history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+}
 
-  const rootSel = $("#f-department-root");
-  departments
-    .filter((dep) => (dep.depth || 0) === 0)
-    .forEach((dep) => {
-      const opt = document.createElement("option");
-      opt.value = dep.id;
-      opt.textContent = dep.label || dep.name;
-      rootSel.appendChild(opt);
+const STATUS_PARAMS = {
+  active: ["new", "active"],
+  waiting: ["deferred"],
+  all: ["new", "active", "deferred"],
+};
+
+function retailerExpandKey(slug) { return `deals_retailer_expanded_${slug}`; }
+function deptExpandKey(name) { return `deals_dept_expanded_${name}`; }
+
+async function loadTree() {
+  const params = new URLSearchParams();
+  if (scope.retailerSlug) params.set("retailer", scope.retailerSlug);
+  if (scope.storeId) params.set("store_id", scope.storeId);
+  if (scope.departmentId) {
+    if (scope.includeDescendants && scope.departmentName) params.set("department_prefix", scope.departmentName);
+    else params.set("department_id", scope.departmentId);
+  }
+
+  const tree = await api(`/api/deals/tree?${params.toString()}`);
+  if (!scope.retailerSlug) scope.retailerSlug = tree.selected_retailer;
+  window._retailerTree = tree.retailers;
+  renderRetailerTree(tree.retailers);
+  renderDepartmentTree(tree.departments);
+  renderStatusBar(tree.status_counts);
+  renderScopeBar();
+}
+
+function renderRetailerTree(retailers) {
+  const el = $("#retailer-tree");
+  el.innerHTML = "";
+  for (const r of retailers) {
+    const expanded = r.slug === scope.retailerSlug || localStorage.getItem(retailerExpandKey(r.slug)) === "1";
+    const isSelectedRetailer = r.slug === scope.retailerSlug;
+
+    const retailerRow = document.createElement("div");
+    retailerRow.className = `tree-row ${isSelectedRetailer && !scope.storeId ? "selected" : ""} ${r.total === 0 ? "zero" : ""}`;
+    retailerRow.innerHTML = `<span class="tree-toggle">${expanded ? "\u25BE" : "\u25B8"}</span><span class="tree-name">${escapeHtml(r.display_name)}</span><span class="tree-count">${r.total}</span>`;
+    retailerRow.querySelector(".tree-toggle").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      localStorage.setItem(retailerExpandKey(r.slug), expanded ? "0" : "1");
+      renderRetailerTree(retailers);
     });
-  rootSel.addEventListener("change", () => {
-    populateDepartmentLeafOptions(rootSel.value);
+    retailerRow.addEventListener("click", () => selectRetailer(r.slug));
+    el.appendChild(retailerRow);
+    if (!expanded) continue;
+
+    const allRow = document.createElement("div");
+    allRow.className = `tree-row indent ${isSelectedRetailer && !scope.storeId ? "selected" : ""}`;
+    allRow.innerHTML = `<span class="tree-name">All ${r.stores.length} store${r.stores.length === 1 ? "" : "s"}</span><span class="tree-count">${r.total}</span>`;
+    allRow.addEventListener("click", () => selectRetailer(r.slug));
+    el.appendChild(allRow);
+
+    for (const s of r.stores) {
+      const storeSelected = isSelectedRetailer && String(scope.storeId) === String(s.store_id);
+      const storeRow = document.createElement("div");
+      storeRow.className = `tree-row indent ${storeSelected ? "selected" : ""} ${s.open_count === 0 ? "zero" : ""}`;
+      storeRow.innerHTML = `<span class="tree-name">${escapeHtml(s.name || s.retailer_store_id)}</span><span class="tree-count">${s.open_count}</span>`;
+      storeRow.addEventListener("click", () => selectStore(r.slug, s.store_id));
+      el.appendChild(storeRow);
+    }
+  }
+}
+
+function selectRetailer(slug) {
+  scope.retailerSlug = slug;
+  scope.storeId = null;
+  scope.departmentId = null;
+  scope.departmentName = null;
+  saveScopeToUrl();
+  loadTree();
+  loadDeals();
+}
+
+function selectStore(slug, storeId) {
+  scope.retailerSlug = slug;
+  scope.storeId = storeId;
+  saveScopeToUrl();
+  loadTree();
+  loadDeals();
+}
+
+function renderDepartmentTree(departments) {
+  window._departmentTree = departments;
+  const retailerName = window._retailerTree?.find((r) => r.slug === scope.retailerSlug)?.display_name;
+  $("#dept-tree-label").textContent = retailerName ? `${retailerName.toUpperCase()} DEPARTMENTS` : "DEPARTMENTS";
+
+  const filterText = ($("#dept-filter").value || "").toLowerCase().trim();
+  const byName = new Map(departments.map((d) => [d.name, d]));
+  let visibleNames = null; // null means "everything" (no filter active)
+  if (filterText) {
+    visibleNames = new Set(departments.filter((d) => d.label.toLowerCase().includes(filterText)).map((d) => d.name));
+    for (const name of [...visibleNames]) {
+      let p = byName.get(name)?.parent;
+      while (p) { visibleNames.add(p); p = byName.get(p)?.parent; }
+    }
+  }
+
+  const isCollapsed = (d) => {
+    if (filterText) return false; // filtering force-expands everything that matches
+    let p = d.parent;
+    while (p) {
+      if (localStorage.getItem(deptExpandKey(p)) !== "1") return true;
+      p = byName.get(p)?.parent;
+    }
+    return false;
+  };
+
+  const el = $("#department-tree");
+  el.innerHTML = "";
+  for (const d of departments) {
+    if (visibleNames && !visibleNames.has(d.name)) continue;
+    if (isCollapsed(d)) continue;
+    const hasChildren = departments.some((x) => x.parent === d.name);
+    const expanded = !!filterText || localStorage.getItem(deptExpandKey(d.name)) === "1";
+    const selected = String(scope.departmentId) === String(d.id);
+
+    const row = document.createElement("div");
+    row.className = `tree-row ${selected ? "selected" : ""} ${d.count === 0 ? "zero" : ""}`;
+    row.style.paddingLeft = `${6 + d.depth * 14}px`;
+    row.innerHTML = `<span class="tree-toggle">${hasChildren ? (expanded ? "\u25BE" : "\u25B8") : ""}</span><span class="tree-name">${escapeHtml(d.label)}</span><span class="tree-count">${d.count}</span>`;
+    if (hasChildren) {
+      row.querySelector(".tree-toggle").addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        localStorage.setItem(deptExpandKey(d.name), expanded ? "0" : "1");
+        renderDepartmentTree(departments);
+      });
+    }
+    row.addEventListener("click", () => selectDepartment(d));
+    el.appendChild(row);
+  }
+}
+
+function selectDepartment(d) {
+  scope.departmentId = d.id;
+  scope.departmentName = d.name;
+  saveScopeToUrl();
+  loadTree();
+  loadDeals();
+}
+
+function renderScopeBar() {
+  const retailer = window._retailerTree?.find((r) => r.slug === scope.retailerSlug);
+  const parts = [retailer ? escapeHtml(retailer.display_name) : "All retailers"];
+  if (scope.storeId) {
+    const store = retailer?.stores.find((s) => String(s.store_id) === String(scope.storeId));
+    parts.push(escapeHtml(store?.name || "store"));
+  } else {
+    parts.push("all stores");
+  }
+  let breadcrumb = parts.join(" \u00B7 ");
+  if (scope.departmentName) breadcrumb += ` / <strong>${escapeHtml(scope.departmentName)}</strong>`;
+  $("#scope-breadcrumb").innerHTML = breadcrumb;
+
+  const toggle = $("#scope-descendants-toggle");
+  toggle.textContent = `incl. sub-departments ${scope.includeDescendants ? "\u2713" : ""}`;
+  toggle.classList.toggle("on", scope.includeDescendants);
+  toggle.hidden = !scope.departmentId;
+}
+
+function renderStatusBar(counts) {
+  const tags = [
+    { key: "active", label: `Active clearance ${counts.active}` },
+    { key: "waiting", label: `Waiting for deeper cut ${counts.waiting}` },
+    { key: "all", label: `All ${counts.all}` },
+  ];
+  const el = $("#status-bar");
+  el.innerHTML = tags
+    .map((t) => `<button type="button" class="status-tag ${scope.statusFilter === t.key ? "selected" : ""}" data-status="${t.key}">${t.label}</button>`)
+    .join("");
+  el.querySelectorAll(".status-tag").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      scope.statusFilter = btn.dataset.status;
+      saveScopeToUrl();
+      renderStatusBar(counts);
+      loadDeals();
+    })
+  );
+}
+
+function setupScopeBar() {
+  $("#scope-descendants-toggle").addEventListener("click", () => {
+    scope.includeDescendants = !scope.includeDescendants;
+    saveScopeToUrl();
+    renderScopeBar();
+    loadTree();
     loadDeals();
   });
-  $("#f-department-leaf").addEventListener("change", loadDeals);
-
-  const storeSel = $("#f-store");
-  stores.forEach((s) => {
-    const opt = document.createElement("option");
-    opt.value = s.id;
-    opt.textContent = `${s.name || s.retailer_slug} (${s.zip_code})`;
-    storeSel.appendChild(opt);
-  });
+  $("#dept-filter").addEventListener("input", () => renderDepartmentTree(window._departmentTree || []));
 }
 
 function scanConfigFormHtml(scanConfig) {
@@ -714,10 +1076,10 @@ function setupTabs() {
 }
 
 function setupFilters() {
-  // #f-department-root / #f-department-leaf get their own listeners in
-  // loadFilterOptions() (the leaf select also needs to repopulate when the
-  // root changes, not just trigger a reload).
-  ["#f-search", "#f-store", "#f-clearance", "#f-penny", "#f-min-discount", "#f-sort"].forEach(
+  // Sidebar tree selections and the status-bar tags fire their own reload
+  // (selectRetailer/selectStore/selectDepartment, renderStatusBar) -- this
+  // only wires the filter row above the deal list.
+  ["#f-clearance", "#f-penny", "#f-min-discount", "#f-price-min", "#f-price-max", "#f-in-stock", "#f-sort"].forEach(
     (sel) => $(sel).addEventListener("change", loadDeals)
   );
   $("#f-search").addEventListener("input", () => {
@@ -726,9 +1088,33 @@ function setupFilters() {
   });
 }
 
+function setupKeyboardShortcuts() {
+  document.addEventListener("keydown", (ev) => {
+    if ($(".tab-btn.active")?.dataset.tab !== "deals") return;
+    if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+    const rows = $$("#deal-table-body tr:not(.store-expand-row)");
+    if (!rows.length) return;
+    let idx = rows.findIndex((r) => r.classList.contains("focused"));
+
+    if (ev.key === "j" || ev.key === "k") {
+      ev.preventDefault();
+      if (idx >= 0) rows[idx].classList.remove("focused");
+      idx = ev.key === "j" ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0);
+      rows[idx].classList.add("focused");
+      rows[idx].scrollIntoView({ block: "nearest" });
+    } else if (ev.key === "w" && idx >= 0) {
+      rows[idx].querySelector(".want-btn")?.click();
+    } else if (ev.key === "d" && idx >= 0) {
+      rows[idx].querySelector(".not-interested-btn")?.click();
+    }
+  });
+}
+
 async function main() {
   setupTabs();
   setupFilters();
+  setupScopeBar();
+  setupKeyboardShortcuts();
   $("#modal-close").addEventListener("click", closeModal);
   $("#scan-now-btn").addEventListener("click", async () => {
     await api("/api/scan/trigger", { method: "POST" });
@@ -739,8 +1125,10 @@ async function main() {
     $("#build-time").textContent = h.build_time || "unknown";
   });
 
-  await loadFilterOptions();
+  loadScopeFromUrl();
+  await loadTree();
   await loadDeals();
+  localStorage.setItem(LAST_VISIT_KEY, new Date().toISOString());
   await refreshScanStatus();
 
   // A "Share Link" deep link (?product=123) opens straight to that item's

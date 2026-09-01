@@ -8,28 +8,20 @@ from __future__ import annotations
 from typing import Any
 
 
-def list_deals(
-    conn,
-    status: list[str] | None = None,
+def _scope_clauses(
     retailer_slug: str | None = None,
     store_id: int | None = None,
     department_id: int | None = None,
     department_prefix: str | None = None,
-    clearance_only: bool = False,
-    penny_only: bool = False,
-    min_discount_pct: float | None = None,
-    search: str | None = None,
-    sort: str = "recent",
-) -> list[dict[str, Any]]:
+) -> tuple[list[str], list[Any]]:
+    """The retailer/store/department scoping shared by list_deals,
+    status_bar_counts, and (indirectly, via its own per-department query)
+    department_tree_with_counts -- kept in one place so the sidebar's
+    counts and the deal list's filtering can't quietly drift apart.
+    Assumes the caller's query aliases deal as d, product as p, retailer
+    as r, department as dept (list_deals' existing aliases)."""
     clauses = []
     params: list[Any] = []
-
-    if status:
-        clauses.append("d.status = ANY(%s)")
-        params.append(status)
-    else:
-        clauses.append("d.status IN ('new', 'active')")
-
     if retailer_slug:
         clauses.append("r.slug = %s")
         params.append(retailer_slug)
@@ -49,21 +41,70 @@ def list_deals(
         clauses.append("(dept.name = %s OR starts_with(dept.name, %s))")
         params.append(department_prefix)
         params.append(department_prefix + " ")
+    return clauses, params
+
+
+def list_deals(
+    conn,
+    status: list[str] | None = None,
+    retailer_slug: str | None = None,
+    store_id: int | None = None,
+    department_id: int | None = None,
+    department_prefix: str | None = None,
+    clearance_only: bool = False,
+    penny_only: bool = False,
+    min_discount_pct: float | None = None,
+    price_min_cents: int | None = None,
+    price_max_cents: int | None = None,
+    in_stock_only: bool = False,
+    search: str | None = None,
+    sort: str = "recent",
+) -> list[dict[str, Any]]:
+    # Dismissal is product-level (see common/db.py's dismiss_product), and
+    # dismiss_product dual-writes deal.status='dismissed' on every existing
+    # row specifically so History (which asks for status=['dismissed']
+    # unchanged by this feature) still shows it -- so the product-level
+    # exclusion below only applies when the caller ISN'T explicitly asking
+    # for dismissed items; otherwise it would contradict its own dual-write.
+    clauses = [] if status and "dismissed" in status else ["p.dismissed_at IS NULL"]
+    params: list[Any] = []
+
+    if status:
+        clauses.append("d.status = ANY(%s)")
+        params.append(status)
+    else:
+        clauses.append("d.status IN ('new', 'active')")
+
+    scope_clauses, scope_params = _scope_clauses(retailer_slug, store_id, department_id, department_prefix)
+    clauses += scope_clauses
+    params += scope_params
+
     if search:
         clauses.append("p.name ILIKE %s")
         params.append(f"%{search}%")
+    if price_min_cents is not None:
+        clauses.append("po.price_cents >= %s")
+        params.append(price_min_cents)
+    if price_max_cents is not None:
+        clauses.append("po.price_cents <= %s")
+        params.append(price_max_cents)
+    if in_stock_only:
+        clauses.append("po.fulfillment_state = 'in_stock'")
 
     where_sql = " AND ".join(clauses)
 
     order_sql = {
         "recent": "d.updated_at DESC",
+        "oldest": "d.updated_at ASC",
         "discount": "discount_pct DESC NULLS LAST",
+        "price": "po.price_cents ASC",
+        "stock": "po.stock_quantity DESC NULLS LAST",
     }.get(sort, "d.updated_at DESC")
 
     rows = conn.execute(
         f"""
         SELECT
-            d.id AS deal_id, d.status, d.created_at, d.updated_at,
+            d.id AS deal_id, d.status, d.defer_rule, d.created_at, d.updated_at,
             p.id AS product_id, p.retailer_product_id, p.name AS product_name,
             p.image_url, p.canonical_url, p.department_id, dept.name AS department_name,
             s.id AS store_id, s.name AS store_name, s.address AS store_address,
@@ -94,6 +135,125 @@ def list_deals(
     if min_discount_pct is not None:
         rows = [r for r in rows if (r["discount_pct"] or 0) >= min_discount_pct]
     return rows
+
+
+def status_bar_counts(
+    conn,
+    retailer_slug: str | None = None,
+    store_id: int | None = None,
+    department_id: int | None = None,
+    department_prefix: str | None = None,
+) -> dict[str, int]:
+    """Deals page's status-tag row: Active clearance / Waiting for a
+    deeper cut / All, within the current scope. "All" is new+active+
+    deferred (everything untriaged-or-held) -- not stale/bought/dismissed,
+    same posture as list_deals' default filter."""
+    scope_clauses, scope_params = _scope_clauses(retailer_slug, store_id, department_id, department_prefix)
+    scope_sql = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
+    row = conn.execute(
+        f"""
+        SELECT
+            count(*) FILTER (WHERE d.status IN ('new', 'active')) AS active,
+            count(*) FILTER (WHERE d.status = 'deferred') AS waiting,
+            count(*) FILTER (WHERE d.status IN ('new', 'active', 'deferred')) AS all_open
+        FROM deal d
+        JOIN product p ON p.id = d.product_id
+        JOIN store s ON s.id = d.store_id
+        JOIN retailer r ON r.id = p.retailer_id
+        LEFT JOIN department dept ON dept.id = p.department_id
+        WHERE p.dismissed_at IS NULL {scope_sql}
+        """,
+        scope_params,
+    ).fetchone()
+    return {"active": row["active"], "waiting": row["waiting"], "all": row["all_open"]}
+
+
+def retailer_store_tree(conn) -> list[dict[str, Any]]:
+    """Sidebar section 1: retailer -> store, each with an open (new/active,
+    not-dismissed) deal count. One query; grouped in Python since the
+    output shape (retailer with a nested store list) doesn't map cleanly
+    to a flat result set."""
+    rows = conn.execute(
+        """
+        SELECT r.id AS retailer_id, r.slug AS retailer_slug, r.display_name AS retailer_name,
+               s.id AS store_id, s.name AS store_name, s.retailer_store_id,
+               count(d.id) FILTER (WHERE d.status IN ('new', 'active') AND p.dismissed_at IS NULL) AS open_count
+        FROM retailer r
+        JOIN store s ON s.retailer_id = r.id
+        LEFT JOIN deal d ON d.store_id = s.id
+        LEFT JOIN product p ON p.id = d.product_id
+        GROUP BY r.id, r.slug, r.display_name, s.id, s.name, s.retailer_store_id
+        ORDER BY r.display_name, s.name
+        """
+    ).fetchall()
+
+    retailers: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        retailer = retailers.setdefault(row["retailer_id"], {
+            "retailer_id": row["retailer_id"], "slug": row["retailer_slug"],
+            "display_name": row["retailer_name"], "total": 0, "stores": [],
+        })
+        retailer["total"] += row["open_count"]
+        retailer["stores"].append({
+            "store_id": row["store_id"], "name": row["store_name"],
+            "retailer_store_id": row["retailer_store_id"], "open_count": row["open_count"],
+        })
+    return list(retailers.values())
+
+
+def department_tree_with_counts(conn, retailer_slug: str, store_id: int | None = None) -> list[dict[str, Any]]:
+    """Sidebar section 2: this retailer's department tree, reconstructed
+    by build_department_hierarchy (department.parent_department_id is
+    never actually populated -- see that function's docstring), with an
+    open (new/active) deal count per node rolled up to include every
+    descendant, matching "downstream departments are included" in scope."""
+    dept_rows = conn.execute(
+        "SELECT dept.id, dept.name FROM department dept JOIN retailer r ON r.id = dept.retailer_id WHERE r.slug = %s",
+        (retailer_slug,),
+    ).fetchall()
+    hierarchy = build_department_hierarchy([r["name"] for r in dept_rows])
+    id_by_name = {r["name"]: r["id"] for r in dept_rows}
+
+    params: list[Any] = []
+    store_clause = ""
+    if store_id:
+        store_clause = "AND d.store_id = %s"
+        params.append(store_id)
+    params.append(retailer_slug)
+
+    own_counts = {
+        row["name"]: row["open_count"]
+        for row in conn.execute(
+            f"""
+            SELECT dept.name, count(d.id) AS open_count
+            FROM department dept
+            JOIN retailer r ON r.id = dept.retailer_id
+            LEFT JOIN product p ON p.department_id = dept.id AND p.dismissed_at IS NULL
+            LEFT JOIN deal d ON d.product_id = p.id AND d.status IN ('new', 'active') {store_clause}
+            WHERE r.slug = %s
+            GROUP BY dept.name
+            """,
+            params,
+        ).fetchall()
+    }
+
+    # Roll each node's own count up into every ancestor -- deepest first,
+    # so a parent's own_counts contribution already reflects everything
+    # below it by the time IT gets folded into ITS parent.
+    total_counts = dict(own_counts)
+    for node in sorted(hierarchy, key=lambda n: -n["depth"]):
+        parent = node["parent"]
+        if parent:
+            total_counts[parent] = total_counts.get(parent, 0) + total_counts.get(node["name"], 0)
+
+    return [
+        {
+            "id": id_by_name.get(node["name"]),
+            "name": node["name"], "label": node["label"], "depth": node["depth"],
+            "count": total_counts.get(node["name"], 0),
+        }
+        for node in hierarchy
+    ]
 
 
 def deal_detail(conn, deal_id: int) -> dict[str, Any] | None:
@@ -206,8 +366,10 @@ def build_department_hierarchy(names: list[str]) -> list[dict[str, Any]]:
     name always starts with its parent's full name, so each name's parent
     is the longest *other* name in the set that's a real word-boundary
     prefix of it. Returns a parent-before-children ordering with `depth`
-    (for indentation) and `label` (the name with its parent's prefix
-    stripped, so each level only shows what's new)."""
+    (for indentation), `label` (the name with its parent's prefix
+    stripped, so each level only shows what's new), and `parent` (the
+    parent's full name, or None for a root -- used by
+    department_tree_with_counts to roll a count up through ancestors)."""
     unique_names = sorted(set(names))
     children: dict[str | None, list[str]] = {}
     parent_of: dict[str, str | None] = {}
@@ -227,7 +389,7 @@ def build_department_hierarchy(names: list[str]) -> list[dict[str, Any]]:
     def visit(name: str, depth: int) -> None:
         parent = parent_of[name]
         label = name[len(parent) + 1 :] if parent else name
-        result.append({"name": name, "depth": depth, "label": label})
+        result.append({"name": name, "depth": depth, "label": label, "parent": parent})
         for child in sorted(children.get(name, [])):
             visit(child, depth + 1)
 

@@ -9,7 +9,7 @@ from web.backend.queries import build_department_hierarchy
 
 def test_single_root_no_children():
     result = build_department_hierarchy(["Electrical"])
-    assert result == [{"name": "Electrical", "depth": 0, "label": "Electrical"}]
+    assert result == [{"name": "Electrical", "depth": 0, "label": "Electrical", "parent": None}]
 
 
 def test_reconstructs_three_level_chain():
@@ -20,9 +20,10 @@ def test_reconstructs_three_level_chain():
     ]
     result = build_department_hierarchy(names)
     assert result == [
-        {"name": "Electrical", "depth": 0, "label": "Electrical"},
-        {"name": "Electrical Batteries", "depth": 1, "label": "Batteries"},
-        {"name": "Electrical Batteries AA Batteries", "depth": 2, "label": "AA Batteries"},
+        {"name": "Electrical", "depth": 0, "label": "Electrical", "parent": None},
+        {"name": "Electrical Batteries", "depth": 1, "label": "Batteries", "parent": "Electrical"},
+        {"name": "Electrical Batteries AA Batteries", "depth": 2, "label": "AA Batteries",
+         "parent": "Electrical Batteries"},
     ]
 
 

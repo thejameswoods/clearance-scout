@@ -186,6 +186,7 @@ table.deal-table, table.detail-table {
 }
 .deal-table tr:last-child td, .detail-table tr:last-child td { border-bottom: none; }
 .deal-table tbody tr:hover { background: var(--bg); cursor: pointer; }
+.deal-table tbody tr.focused { outline: 2px solid var(--accent); outline-offset: -2px; }
 .deal-table .thumb, .detail-table .thumb {
   width: 48px; height: 48px; object-fit: contain; background: #fafafa; border-radius: 6px;
 }
@@ -298,6 +299,183 @@ button.danger { background: var(--danger); }
 }
 .logs-view .log-line.WARNING { color: var(--yellow); }
 .logs-view .log-line.ERROR { color: #ff8a80; }
+
+/* Deals tab: retailer/store + department tree sidebar, scope bar, status
+   tags, split-button dispositions -- see README's "UI Redsign" handoff
+   for the reference wireframes. Built on this file's existing tokens, not
+   the wireframe's own styling (a deliberate choice, see that handoff). */
+main:has(#tab-deals.active) { max-width: 1400px; }
+
+.deals-layout { display: flex; gap: 20px; align-items: flex-start; }
+.deals-sidebar {
+  flex: 0 0 252px;
+  border-right: 1px solid var(--border);
+  padding-right: 16px;
+  position: sticky;
+  top: 20px;
+}
+.deals-main { flex: 1; min-width: 0; }
+
+.sidebar-section { margin-bottom: 20px; }
+.sidebar-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+#dept-filter {
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.tree { display: flex; flex-direction: column; }
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.tree-row:hover { background: var(--bg); }
+.tree-row.selected { background: #fdece1; color: var(--accent); font-weight: 700; }
+.tree-row.zero { color: var(--text-dim); opacity: 0.6; }
+.tree-row.indent { padding-left: 20px; }
+.tree-toggle {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-align: center;
+  cursor: pointer;
+}
+.tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.tree-row.selected .tree-count { color: var(--accent); }
+
+.scope-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.scope-breadcrumb { font-size: 0.85rem; color: var(--text-dim); }
+.scope-breadcrumb strong { color: var(--text); font-weight: 700; }
+.tag-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.tag-toggle.on { border-color: var(--accent); color: var(--accent); }
+
+.status-bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.status-tag {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.status-tag.selected { background: var(--accent); border-color: var(--accent); color: white; }
+
+.new-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #fdece1;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+.new-bar button { font-size: 0.78rem; padding: 6px 10px; }
+
+.deal-table .store-line { font-size: 0.8rem; }
+.deal-table .store-expand-toggle { color: var(--accent); cursor: pointer; font-weight: 600; }
+.deal-table .detected-col { font-size: 0.8rem; }
+.deal-table .detected-col .relative { font-weight: 600; }
+.deal-table .detected-col .absolute { color: var(--text-dim); font-size: 0.74rem; }
+.store-expand-row td { background: var(--bg); font-size: 0.82rem; }
+.store-expand-row .store-expand-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.split-btn { display: inline-flex; }
+.split-btn button {
+  border-radius: 0;
+  font-size: 0.78rem;
+  padding: 6px 10px;
+}
+.split-btn .want-btn { border-radius: 8px 0 0 8px; }
+.split-btn .not-interested-btn { background: var(--border); color: var(--text); border-right: 1px solid var(--card-bg); }
+.split-btn .not-yet-caret { border-radius: 0 8px 8px 0; background: var(--border); color: var(--text); padding: 6px 7px; }
+.split-btn .not-yet-caret.open { background: var(--accent); color: white; }
+
+.not-yet-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  padding: 14px;
+  font-size: 0.85rem;
+}
+.not-yet-panel .panel-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.not-yet-panel label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.not-yet-panel input[type="number"], .not-yet-panel select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.not-yet-panel .modal-actions { margin-top: 10px; }
+.not-yet-panel .footnote { font-size: 0.72rem; color: var(--text-dim); margin-top: 8px; }
+
+.deferred-note { font-size: 0.78rem; color: var(--text-dim); font-style: italic; }
 
 .build-footer {
   text-align: center;

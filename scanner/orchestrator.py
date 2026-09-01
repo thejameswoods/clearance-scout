@@ -295,6 +295,14 @@ def run_scan(
         if recycle_browser_ctx is not None:
             browser_ctx = recycle_browser_ctx(browser_ctx)
 
+    # "Not yet" deals whose threshold a fresh observation just satisfied --
+    # at any of the product's stores, not just the one it was deferred at
+    # (see db.reactivate_satisfied_defers's docstring). One pass at the end
+    # of the scan rather than threaded into the per-item check loop above.
+    reactivated_count = db.reactivate_satisfied_defers(conn)
+    if reactivated_count:
+        logger.info("%d deferred deal(s) reactivated (threshold met)", reactivated_count)
+
     return {
         "stores_scanned": stores_scanned,
         "departments_scanned": departments_scanned,

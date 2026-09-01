@@ -43,6 +43,11 @@ CREATE TABLE product (
     canonical_url         TEXT,
     first_seen_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Set (once, permanently) when the user disposition's a product as
+    -- "not interested" -- product-level and cross-store by design (unlike
+    -- deal.status, which is per product+store): the same SKU showing up
+    -- at a different store shouldn't need dismissing again.
+    dismissed_at          TIMESTAMPTZ,
     UNIQUE (retailer_id, retailer_product_id)
 );
 
@@ -96,7 +101,13 @@ CREATE TABLE deal (
     first_observation_id   INTEGER NOT NULL REFERENCES price_observation(id),
     latest_observation_id  INTEGER NOT NULL REFERENCES price_observation(id),
     status                 TEXT NOT NULL DEFAULT 'new'
-                            CHECK (status IN ('new', 'active', 'stale', 'saved', 'bought', 'dismissed')),
+                            CHECK (status IN ('new', 'active', 'stale', 'saved', 'bought', 'dismissed', 'deferred')),
+    -- Only meaningful when status = 'deferred' -- {"type": "discount_pct" |
+    -- "price" | "penny", "value": ...}. Checked against every store's
+    -- latest observation of this product once per scan (see
+    -- common/db.py's reactivate_satisfied_defers) -- satisfying it
+    -- anywhere flips this row back to 'new'.
+    defer_rule             JSONB,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (product_id, store_id)
