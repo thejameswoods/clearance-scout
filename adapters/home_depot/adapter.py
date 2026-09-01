@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from ..base import (
     AuthResult,
     Department,
+    PriceCheckResult,
     PriceObservation,
     ProductRef,
     RateLimitPolicy,
     RetailerAdapter,
     StoreInfo,
 )
-from .api_client import HOME_URL, HomeDepotApiClient
+from .api_client import HOME_URL, PRICE_CHECK_MAX_BATCH, HomeDepotApiClient
 from .clearance import detect_clearance as _detect_clearance
 from .clearance import effective_price as _effective_price
 from .clearance import stock_quantity as _stock_quantity
@@ -28,6 +31,11 @@ CATEGORY_PAGE_SIZE = 48
 CATEGORY_MAX_PAGES = 5  # 5*48=240 items/department -- more conservative than
                          # HDScanner's 15-page/720-item cap; WATCHED_DEPARTMENTS
                          # already narrows scope, so exhaustiveness matters less.
+
+# HDScanner's own validated wave shape for phase-3 price checks: 5
+# concurrent PRICE_CHECK_MAX_BATCH(16)-item requests = 80 items/wave, not
+# ramped further ("proven safe, do not ramp" -- their own comment).
+WAVE_PARALLEL_CHUNKS = 5
 
 
 class HomeDepotAdapter(RetailerAdapter):
@@ -136,17 +144,11 @@ class HomeDepotAdapter(RetailerAdapter):
     def check_price(
         self, browser_ctx: Any, product_ref: ProductRef, store: StoreInfo
     ) -> PriceObservation:
-        # NOTE: Home Depot's real API supports up to 16 itemIds per
-        # mediaPriceInventory call (see api_client.py) -- HDScanner batches
-        # aggressively for exactly this reason. This adapter currently
-        # calls it one item at a time because RetailerAdapter.check_price()
-        # is a per-product method (see adapters/base.py). That's up to 16x
-        # more requests than necessary and a real known inefficiency, not
-        # fixed here -- batching would need a contract change (a
-        # check_prices(product_refs) -> Iterator[PriceObservation] method,
-        # or similar) touching base.py and orchestrator.py, deliberately
-        # deferred rather than rushed alongside everything else in this
-        # session.
+        # The base ABC still requires this single-item method, but the
+        # orchestrator calls check_prices() (overridden below) as its
+        # primary path -- this stays as a working fallback (e.g. for a
+        # manual single-SKU lookup) sharing the same parsing logic via
+        # _build_observation, not a second copy of it.
         client = HomeDepotApiClient(browser_ctx)
         response = client.media_price_inventory(store.retailer_store_id, [product_ref.retailer_product_id])
         products = response.get("data", {}).get("products") or []
@@ -155,8 +157,32 @@ class HomeDepotAdapter(RetailerAdapter):
                 f"Home Depot returned no data for item {product_ref.retailer_product_id} "
                 "(delisted, invalid ID, or not carried at this store)"
             )
-        raw = products[0]
+        observation = self._build_observation(products[0], product_ref, store)
 
+        # Aisle/bay + canonical URL + image each cost an extra API call
+        # (product_detail, then aislebay) -- only worth paying for a
+        # confirmed hit, not every product checked. Matches HDScanner's own
+        # behavior (its background.js only calls its equivalent enrichment
+        # on items that already passed the clearance/penny filter, not the
+        # full checked set).
+        if observation.is_clearance or observation.is_penny:
+            aisle, bay, canonical_url, image_url = self._enrich_confirmed_hit(client, product_ref, store)
+            observation = PriceObservation(
+                **{**observation.__dict__, "aisle": aisle, "bay": bay,
+                   "canonical_url": canonical_url, "image_url": image_url}
+            )
+
+        return observation
+
+    def _build_observation(
+        self, raw: dict[str, Any], product_ref: ProductRef, store: StoreInfo
+    ) -> PriceObservation:
+        """The pricing/clearance/penny parsing shared by check_price() and
+        check_prices() -- everything except enrichment (aisle/bay/
+        canonical_url/image_url), which only applies to confirmed hits and
+        is handled differently by each caller (one API call per hit vs.
+        batched across a whole wave's hits -- see _enrich_confirmed_hit /
+        _enrich_wave_hits)."""
         clearance_signal = self.detect_clearance(raw)
         pricing = raw.get("pricing") or {}
         fulfillment_state = self._pickup_fulfillment_state(raw)
@@ -192,24 +218,227 @@ class HomeDepotAdapter(RetailerAdapter):
         # is_penny depends on the fully-built observation (price + fulfillment
         # state together), so it's computed after construction and the
         # dataclass is frozen — rebuild with the flag set.
-        observation = PriceObservation(
+        return PriceObservation(
             **{**observation.__dict__, "is_penny": self.detect_penny(observation)}
         )
 
-        # Aisle/bay + canonical URL + image each cost an extra API call
-        # (product_detail, then aislebay) -- only worth paying for a
-        # confirmed hit, not every product checked. Matches HDScanner's own
-        # behavior (its background.js only calls its equivalent enrichment
-        # on items that already passed the clearance/penny filter, not the
-        # full checked set).
-        if observation.is_clearance or observation.is_penny:
-            aisle, bay, canonical_url, image_url = self._enrich_confirmed_hit(client, product_ref, store)
-            observation = PriceObservation(
-                **{**observation.__dict__, "aisle": aisle, "bay": bay,
-                   "canonical_url": canonical_url, "image_url": image_url}
+    def check_prices(
+        self, browser_ctx: Any, product_refs: list[ProductRef], store: StoreInfo,
+        rate_limiter: Any,
+    ) -> Iterator[PriceCheckResult]:
+        """Real batching, overriding RetailerAdapter's per-item default --
+        modeled directly on HDScanner's own validated wave approach
+        (confirmed live from their source, not guessed): chunks of
+        PRICE_CHECK_MAX_BATCH(16) items, WAVE_PARALLEL_CHUNKS(5) chunks
+        fired concurrently per wave (80 items/wave), paced between waves
+        by _wave_pace_level's escalating/breather schedule -- their own
+        numbers, not a generic formula. In practice this is roughly the
+        same total work in a small fraction of the round trips the default
+        one-item-at-a-time path needs.
+
+        `rate_limiter` (a scanner.ratelimit.RateLimiter) isn't used for
+        its own wait_before_next_request() pacing here -- that's this
+        method's own concern now -- but record_403()/record_success() are
+        still called so the same rate_limit_event log the dashboard reads
+        keeps reflecting reality regardless of which check_prices()
+        implementation ran.
+        """
+        if not product_refs:
+            return
+
+        client = HomeDepotApiClient(browser_ctx)
+        store_id = store.retailer_store_id
+
+        chunks = [
+            product_refs[i:i + PRICE_CHECK_MAX_BATCH]
+            for i in range(0, len(product_refs), PRICE_CHECK_MAX_BATCH)
+        ]
+        waves = [chunks[i:i + WAVE_PARALLEL_CHUNKS] for i in range(0, len(chunks), WAVE_PARALLEL_CHUNKS)]
+
+        consecutive_wave_failures = 0
+        waves_since_breather = 0
+
+        for wave_index, wave_chunks in enumerate(waves):
+            is_last_wave = wave_index == len(waves) - 1
+            item_id_chunks = [[ref.retailer_product_id for ref in chunk] for chunk in wave_chunks]
+
+            try:
+                responses = client.media_price_inventory_wave(store_id, item_id_chunks)
+            except Exception as exc:
+                logger.exception("Wave-level fetch failed (wave %d/%d)", wave_index + 1, len(waves))
+                for chunk in wave_chunks:
+                    for ref in chunk:
+                        yield PriceCheckResult(product_ref=ref, error=str(exc))
+                consecutive_wave_failures += 1
+                consecutive_wave_failures, waves_since_breather = self._wave_pause(
+                    consecutive_wave_failures, waves_since_breather, is_last_wave
+                )
+                continue
+
+            wave_had_success = False
+            pending_hits: list[tuple[ProductRef, PriceObservation]] = []
+
+            for chunk, response in zip(wave_chunks, responses):
+                if response.get("error"):
+                    for ref in chunk:
+                        yield PriceCheckResult(product_ref=ref, error=response["error"])
+                    if response.get("status") in (403, 429):
+                        rate_limiter.record_403()
+                    continue
+
+                wave_had_success = True
+                products_by_id = {p.get("itemId"): p for p in (response.get("data", {}).get("products") or [])}
+                for ref in chunk:
+                    raw = products_by_id.get(ref.retailer_product_id)
+                    if raw is None:
+                        yield PriceCheckResult(
+                            product_ref=ref,
+                            error=f"Home Depot returned no data for item {ref.retailer_product_id}",
+                        )
+                        continue
+                    try:
+                        observation = self._build_observation(raw, ref, store)
+                    except Exception as exc:
+                        yield PriceCheckResult(product_ref=ref, error=str(exc))
+                        continue
+                    if observation.is_clearance or observation.is_penny:
+                        pending_hits.append((ref, observation))
+                    else:
+                        yield PriceCheckResult(product_ref=ref, observation=observation)
+
+            if wave_had_success:
+                rate_limiter.record_success()
+
+            if pending_hits:
+                for ref, observation in self._enrich_wave_hits(client, store, pending_hits):
+                    yield PriceCheckResult(product_ref=ref, observation=observation)
+
+            consecutive_wave_failures = 0 if wave_had_success else consecutive_wave_failures + 1
+            consecutive_wave_failures, waves_since_breather = self._wave_pause(
+                consecutive_wave_failures, waves_since_breather, is_last_wave
             )
 
-        return observation
+    @staticmethod
+    def _wave_pace_level(consecutive_failures: int) -> tuple[float, float, str, bool]:
+        """Pure -- given the current consecutive-total-wave-failure count,
+        returns (base_delay_seconds, jitter_seconds, level_name,
+        resets_counter). HDScanner's own validated escalation: clean ->
+        1-3s; 1-2 failures -> 8-15s ("light", doesn't reset -- a couple of
+        blips isn't a real signal yet); 3-4 -> 45-90s ("moderate", resets);
+        5+ -> 180-300s ("heavy", resets). Split out from _wave_pause so
+        the schedule itself is testable without mocking time.sleep."""
+        if consecutive_failures >= 5:
+            return 180.0, 120.0, "heavy", True
+        if consecutive_failures >= 3:
+            return 45.0, 45.0, "moderate", True
+        if consecutive_failures > 0:
+            return 8.0, 7.0, "light", False
+        return 1.0, 2.0, "ok", False
+
+    def _wave_pause(
+        self, consecutive_failures: int, waves_since_breather: int, is_last_wave: bool
+    ) -> tuple[int, int]:
+        """Sleeps between waves per _wave_pace_level, plus a flat breather
+        every 10 clean waves (HDScanner's own numbers) regardless of the
+        escalation state. Returns the (possibly reset) consecutive_failures
+        and waves_since_breather counters. No-ops on the last wave -- no
+        reason to pace after there's nothing left to send."""
+        if is_last_wave:
+            return consecutive_failures, waves_since_breather
+
+        base, jitter, level, resets = self._wave_pace_level(consecutive_failures)
+        if resets:
+            consecutive_failures = 0
+
+        waves_since_breather += 1
+        if waves_since_breather >= 10 and consecutive_failures == 0:
+            breather = 8.0 + random.uniform(0, 12)
+            logger.info("Wave pacing: breather pause %.0fs", breather)
+            time.sleep(breather)
+            waves_since_breather = 0
+
+        delay = base + random.uniform(0, jitter)
+        if level != "ok":
+            logger.warning("Wave pacing: %s rate limiting, backing off %.0fs", level, delay)
+        time.sleep(delay)
+        return consecutive_failures, waves_since_breather
+
+    def _enrich_wave_hits(
+        self, client: HomeDepotApiClient, store: StoreInfo,
+        hits: list[tuple[ProductRef, PriceObservation]],
+    ) -> list[tuple[ProductRef, PriceObservation]]:
+        """The batched counterpart to _enrich_confirmed_hit: one concurrent
+        product_detail_wave() call for every hit in a wave (instead of one
+        product_detail() call per hit), plus aislebay() batched up to its
+        own native 20-storeSkuId cap. A wave rarely has more than a
+        handful of real hits, so this is a small, cheap addition on top of
+        the price-check wave itself, not per-hit round trips."""
+        item_ids = [ref.retailer_product_id for ref, _ in hits]
+        try:
+            details = client.product_detail_wave(store.retailer_store_id, item_ids)
+        except Exception:
+            logger.exception("Batch product_detail enrichment failed for a wave of %d hit(s)", len(hits))
+            return hits  # unenriched is still a real, usable observation
+
+        canonical_urls: dict[str, str | None] = {}
+        image_urls: dict[str, str | None] = {}
+        store_sku_ids: dict[str, str | None] = {}
+
+        for (ref, _), detail in zip(hits, details):
+            if detail.get("error"):
+                logger.info("product_detail enrichment failed for %s: %s", ref.retailer_product_id, detail["error"])
+                continue
+            canonical_url, image_url, store_sku_id = self._parse_product_detail(detail)
+            canonical_urls[ref.retailer_product_id] = canonical_url
+            image_urls[ref.retailer_product_id] = image_url
+            store_sku_ids[ref.retailer_product_id] = store_sku_id
+
+        sku_to_ref_id = {sku: ref_id for ref_id, sku in store_sku_ids.items() if sku}
+        aisle_bay: dict[str, tuple[str | None, str | None]] = {}
+        sku_list = list(sku_to_ref_id.keys())
+        for i in range(0, len(sku_list), 20):
+            sku_chunk = sku_list[i:i + 20]
+            try:
+                ab = client.aislebay(store.retailer_store_id, sku_chunk)
+                store_skus = ((ab.get("data") or {}).get("aislebay") or {}).get("storeSkus") or []
+                for entry in store_skus:
+                    sku = entry.get("storeSkuId")
+                    if sku:
+                        info = entry.get("aisleBayInfo") or {}
+                        aisle_bay[sku] = (info.get("aisle"), info.get("bay"))
+            except Exception:
+                logger.exception("Batch aislebay enrichment failed for %d SKU(s)", len(sku_chunk))
+
+        enriched: list[tuple[ProductRef, PriceObservation]] = []
+        for ref, observation in hits:
+            sku = store_sku_ids.get(ref.retailer_product_id)
+            aisle, bay = aisle_bay.get(sku, (None, None)) if sku else (None, None)
+            enriched.append((ref, PriceObservation(**{
+                **observation.__dict__,
+                "aisle": aisle, "bay": bay,
+                "canonical_url": canonical_urls.get(ref.retailer_product_id),
+                "image_url": image_urls.get(ref.retailer_product_id),
+            })))
+        return enriched
+
+    @staticmethod
+    def _parse_product_detail(detail: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+        """Pure -- pulls (canonical_url, image_url, store_sku_id) out of a
+        raw productClientOnlyProduct response. Shared by the per-hit
+        (_enrich_confirmed_hit) and per-wave (_enrich_wave_hits) enrichment
+        paths so the field-parsing logic (including the confirmed-live
+        "<SIZE>" template substitution) lives in exactly one place."""
+        product = (detail.get("data") or {}).get("product") or {}
+        identifiers = product.get("identifiers") or {}
+        canonical_url = identifiers.get("canonicalUrl")
+        if canonical_url and not canonical_url.startswith("http"):
+            canonical_url = f"{HOME_URL.rstrip('/')}{canonical_url}"
+
+        images = (product.get("media") or {}).get("images") or []
+        image_url = images[0].get("url", "").replace("<SIZE>", "400") if images else None
+
+        store_sku_id = identifiers.get("storeSkuNumber")
+        return canonical_url, image_url, store_sku_id
 
     def _enrich_confirmed_hit(
         self, client: HomeDepotApiClient, product_ref: ProductRef, store: StoreInfo
@@ -220,22 +449,7 @@ class HomeDepotAdapter(RetailerAdapter):
             logger.exception("product_detail enrichment failed for %s", product_ref.retailer_product_id)
             return (None, None, None, None)
 
-        product = (detail.get("data") or {}).get("product") or {}
-        identifiers = product.get("identifiers") or {}
-        canonical_url = identifiers.get("canonicalUrl")
-        if canonical_url and not canonical_url.startswith("http"):
-            canonical_url = f"{HOME_URL.rstrip('/')}{canonical_url}"
-
-        # Confirmed live 2026-08-31: media.images.url is real, but the URL
-        # itself is a size template (".../white-outlet-wall-plates-...-64_
-        # <SIZE>.jpg") -- literal "<SIZE>" isn't a loadable image. The exact
-        # set of valid values isn't confirmed (no source to check this
-        # against, same as the field itself); 400 is a reasonable
-        # thumbnail-to-detail-view size, not a confirmed "correct" one.
-        images = (product.get("media") or {}).get("images") or []
-        image_url = images[0].get("url", "").replace("<SIZE>", "400") if images else None
-
-        store_sku_id = identifiers.get("storeSkuNumber")
+        canonical_url, image_url, store_sku_id = self._parse_product_detail(detail)
         aisle = bay = None
         if not store_sku_id:
             # Silent before this fix -- confirmed live 2026-08-31 a real
@@ -266,24 +480,26 @@ class HomeDepotAdapter(RetailerAdapter):
         return _detect_penny(observation)
 
     # No location_hint() override: aisle/bay is wired in directly in
-    # check_price via _enrich_confirmed_hit instead of this base-class hook.
-    # The real `aislebay` query needs a storeSkuId (from product_detail's
-    # identifiers.storeSkuNumber), not the itemId location_hint() is handed
-    # -- and it's only worth fetching for a confirmed hit anyway, which
-    # check_price already knows and this standalone hook wouldn't.
+    # check_price/check_prices via _enrich_confirmed_hit/_enrich_wave_hits
+    # instead of this base-class hook. The real `aislebay` query needs a
+    # storeSkuId (from product_detail's identifiers.storeSkuNumber), not
+    # the itemId location_hint() is handed -- and it's only worth fetching
+    # for a confirmed hit anyway, which this standalone hook wouldn't know.
 
     def rate_limit_policy(self) -> RateLimitPolicy:
-        # Confirmed real values (not a guess from HDScanner's README
-        # prose, which was more conservative than what their actual code
-        # does) -- see api_client.py's module docstring. Their 403/429
-        # backoff is 10s/30s/90s exponential + jitter (Akamai, not
-        # PerimeterX -- this API layer isn't the login flow). min/max
-        # delay here is more conservative than their ~300-500ms
-        # between-wave pacing on purpose: they pace between waves of 16
-        # batched items; this adapter calls one item at a time (see
-        # check_price's docstring note), so matching their per-wave delay
-        # here would mean far more total request volume in the same
-        # window than their validated-safe pattern.
+        # Confirmed real values (not a guess from HDScanner's README prose,
+        # which was more conservative than what their actual code does) --
+        # see api_client.py's module docstring. Their 403/429 backoff is
+        # 10s/30s/90s exponential + jitter (Akamai, not PerimeterX -- this
+        # API layer isn't the login flow).
+        #
+        # This policy now only drives RetailerAdapter's default per-item
+        # check_prices() fallback (unused in practice -- check_prices() is
+        # overridden below with real wave-based batching, which paces
+        # itself via _wave_pace_level using HDScanner's own validated
+        # between-wave numbers instead of this per-item policy). Kept
+        # correct/conservative regardless, since it's still what a future
+        # single-item code path would fall back to.
         return RateLimitPolicy(
             min_delay_seconds=1.5,
             max_delay_seconds=3.0,

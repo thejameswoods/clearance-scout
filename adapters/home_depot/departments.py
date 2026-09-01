@@ -19,10 +19,14 @@ here matters less than it would for a general-purpose scanner.
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from typing import Any, Iterator
 
 from ..base import Department
+
+logger = logging.getLogger("clearance_scout.adapters.home_depot")
 
 SITEMAP_ENTRY_POINTS = [
     "https://www.homedepot.com/sitemap.xml",
@@ -36,11 +40,35 @@ _NOISE_NAV_PARAM_RE = re.compile(r"Z1z[a-z]")  # matches HDScanner's own noise f
 MAX_CRAWL_DEPTH = 2
 
 
-def _fetch_locs(browser_ctx: Any, url: str) -> list[str]:
-    response = browser_ctx.request.get(url, timeout=15000)
-    if not response.ok:
-        return []
-    return _LOC_RE.findall(response.text())
+def _fetch_locs(browser_ctx: Any, url: str, retries: int = 2, retry_delay_seconds: float = 2.0) -> list[str]:
+    # HD's sitemap endpoints occasionally hold the socket open without
+    # responding at all (HDScanner's own source retries for exactly this
+    # reason). Confirmed live 2026-09-01: a single unretried timeout here
+    # aborted an entire scheduled scan over what was a normal, recoverable
+    # network hiccup, not a real failure. A genuine 404 is different --
+    # retrying that can't help, so it returns immediately without using up
+    # a retry.
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            response = browser_ctx.request.get(url, timeout=15000)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Sitemap fetch failed (attempt %d/%d) for %s: %s", attempt + 1, retries + 1, url, exc)
+            if attempt < retries:
+                time.sleep(retry_delay_seconds)
+            continue
+
+        if response.ok:
+            return _LOC_RE.findall(response.text())
+        if response.status == 404:
+            return []
+        last_exc = RuntimeError(f"HTTP {response.status} for {url}")
+        logger.warning("Sitemap fetch got HTTP %s (attempt %d/%d) for %s", response.status, attempt + 1, retries + 1, url)
+        if attempt < retries:
+            time.sleep(retry_delay_seconds)
+
+    raise last_exc
 
 
 def discover_departments(browser_ctx: Any) -> Iterator[Department]:

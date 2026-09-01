@@ -37,6 +37,8 @@ class ConfigurableFakeAdapter(RetailerAdapter):
         departments: list[Department] | None = None,
         products_by_department: dict[str, list[ProductRef]] | None = None,
         price_cents: int = 999,
+        permission_error_skus: set[str] | None = None,
+        failing_skus: set[str] | None = None,
     ):
         self.stores = stores or [StoreInfo(retailer_store_id="store-1", zip_code="00000", name="Fake Store 1")]
         self.departments = departments or [Department(retailer_department_id="dept-1", name="Widgets")]
@@ -46,7 +48,10 @@ class ConfigurableFakeAdapter(RetailerAdapter):
             ]
         }
         self.price_cents = price_cents
+        self.permission_error_skus = permission_error_skus or set()
+        self.failing_skus = failing_skus or set()
         self.list_products_call_count = 0
+        self.discover_departments_call_count = 0
 
     def authenticate(self, browser_ctx) -> AuthResult:
         return AuthResult(valid=True)
@@ -58,6 +63,7 @@ class ConfigurableFakeAdapter(RetailerAdapter):
         browser_ctx.clearance_scout_store_id = store.retailer_store_id
 
     def discover_departments(self, browser_ctx) -> Iterator[Department]:
+        self.discover_departments_call_count += 1
         yield from self.departments
 
     def list_products(self, browser_ctx, department: Department) -> Iterator[ProductRef]:
@@ -65,6 +71,10 @@ class ConfigurableFakeAdapter(RetailerAdapter):
         yield from self.products_by_department.get(department.retailer_department_id, [])
 
     def check_price(self, browser_ctx, product_ref: ProductRef, store: StoreInfo) -> PriceObservation:
+        if product_ref.retailer_product_id in self.permission_error_skus:
+            raise PermissionError(f"fake 403 for {product_ref.retailer_product_id}")
+        if product_ref.retailer_product_id in self.failing_skus:
+            raise RuntimeError(f"fake failure for {product_ref.retailer_product_id}")
         return PriceObservation(
             product_ref=product_ref,
             store=store,

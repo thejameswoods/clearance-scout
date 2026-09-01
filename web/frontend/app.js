@@ -432,7 +432,7 @@ async function loadSettings() {
           <dt>Radius</dt><dd>${scanConfig.radius_miles} miles</dd>
           <dt>Watched departments</dt><dd>${escapeHtml(listOrAll(scanConfig.watched_departments))}</dd>
           <dt>Watch keywords</dt><dd>${escapeHtml(listOrAll(scanConfig.watch_keywords))}</dd>
-          <dt>Scan interval</dt><dd>${scanConfig.scan_interval_minutes} min</dd>
+          <dt>Scan interval</dt><dd>${scanConfig.scan_interval_minutes > 0 ? scanConfig.scan_interval_minutes + " min" : "Disabled (manual trigger only)"}</dd>
           <dt>Scan on startup</dt><dd>${scanConfig.scan_on_startup ? "Yes" : "No (dev mode -- trigger manually)"}</dd>
           <dt>Product list cache</dt><dd>${scanConfig.product_list_cache_hours} hours</dd>
         </dl>`
@@ -497,6 +497,28 @@ async function refreshScanStatus() {
   const scanInProgress = state === "scanning" || state === "starting";
   btn.disabled = scanInProgress;
   btn.textContent = scanInProgress ? "Scanning…" : "Scan now";
+
+  // Live checkpoint progress (see orchestrator.py's on_progress) -- "what
+  // is it actually doing right now", not just a state word. Confirmed
+  // real friction this session: this used to require reading logs or the
+  // DB by hand to answer.
+  const detail = $("#scan-progress-detail");
+  const p = status.scanner.progress;
+  if (!scanInProgress || !p || !p.phase) {
+    detail.hidden = true;
+  } else {
+    const parts = [];
+    if (p.store) parts.push(`Store ${p.store_index || "?"}/${p.stores_total || "?"} (${p.store})`);
+    if (p.department) {
+      const deptProgress = p.department_products_total
+        ? `${p.department_products_checked || 0}/${p.department_products_total}`
+        : "…";
+      parts.push(`Dept ${p.department_index || "?"}/${p.departments_total || "?"} "${p.department}" ${deptProgress}`);
+    }
+    if (p.errors_count) parts.push(`${p.errors_count} error(s)`);
+    detail.textContent = parts.join(" · ") || "Starting…";
+    detail.hidden = parts.length === 0;
+  }
 }
 
 // noVNC's own client page, proxied same-origin through /vnc/* (see

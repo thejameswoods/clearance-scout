@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from adapters.base import Department, NeedsLogin, ProductRef, RetailerAdapter
 from common import db
@@ -53,6 +54,8 @@ def run_scan(
     watched_departments: list[str] | None = None,
     watch_keywords: list[str] | None = None,
     product_list_cache_hours: float = 24.0,
+    recycle_browser_ctx: Callable[[object], object] | None = None,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict:
     """Runs one full scan (auth check -> stores in radius -> departments ->
     products -> prices) for one retailer, writing results to Postgres as it
@@ -74,7 +77,30 @@ def run_scan(
     A department already listed within this window is served from the
     `product` table (see common/db.py's product-ID cache) instead of
     re-querying the retailer.
+
+    `recycle_browser_ctx`: given `browser_ctx`, returns a fresh replacement
+    (closing the old one) -- called once per store. Confirmed live
+    2026-08-31/09-01 that Patchright's driver process leaks memory roughly
+    linearly with total request count regardless of scan size (issue #4,
+    still unresolved as a root cause); since login is no longer required
+    for this retailer, nothing is lost by not holding one browser context
+    for an entire multi-store scan, so recycling periodically bounds the
+    leak's damage instead of letting it compound across an entire run.
+    None (the default) preserves the old behavior of one context for the
+    whole scan.
+
+    `on_progress`: called with a small dict at each checkpoint (stores
+    found, store started, department started/product-count-known,
+    per-item heartbeat, department done) -- feeds the dashboard's live
+    status view (scanner/main.py's /status) so "what's it doing right
+    now" doesn't require reading logs or the DB by hand (confirmed real
+    friction this session, GitHub issue #2). Deliberately reuses the same
+    checkpoints as the logging above rather than firing per-item.
     """
+
+    def _progress(**fields) -> None:
+        if on_progress is not None:
+            on_progress(fields)
 
     retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_slug, "")
     limiter = RateLimiter(
@@ -98,6 +124,29 @@ def run_scan(
     # Per-item logging would also blow past the scanner's 500-line ring
     # buffer (scanner/log_buffer.py) well before a real scan finishes.
     logger.info("%s: found %d store(s) within %s miles of %s", adapter.retailer_slug, len(stores), radius_miles, zip_code)
+    _progress(phase="stores", stores_total=len(stores))
+
+    # Departments aren't store-specific (a retailer's category structure is
+    # the same everywhere), so this only needs to happen once per scan, not
+    # once per store -- confirmed live 2026-09-01 the old code re-ran a
+    # multi-page sitemap crawl once per store (14x redundant work for a
+    # 14-store scan) for identical results every time.
+    scan_run_id = db.start_scan_run(conn, retailer_id, None, "departments", trigger)
+    all_departments = list(adapter.discover_departments(browser_ctx))
+    departments = _select_departments(all_departments, watched_departments, department_filter)
+    db.finish_scan_run(conn, scan_run_id, "completed", 0, 0)
+    logger.info(
+        "%d department(s) discovered, %d match the watch list",
+        len(all_departments), len(departments),
+    )
+    _progress(phase="departments", departments_total=len(departments))
+    department_ids = {
+        department.retailer_department_id: db.upsert_department(
+            conn, retailer_id, department.retailer_department_id, department.name,
+            parent_department_id=None,  # resolved lazily; parent linkage is a nice-to-have, not load-bearing
+        )
+        for department in departments
+    }
 
     stores_scanned = 0
     departments_scanned = 0
@@ -114,21 +163,14 @@ def run_scan(
         )
         stores_scanned += 1
         logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
-
-        scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "departments", trigger)
-        all_departments = list(adapter.discover_departments(browser_ctx))
-        departments = _select_departments(all_departments, watched_departments, department_filter)
-        db.finish_scan_run(conn, scan_run_id, "completed", 0, 0)
-        logger.info(
-            "Store %s: %d department(s) discovered, %d match the watch list",
-            store_info.retailer_store_id, len(all_departments), len(departments),
+        _progress(
+            phase="store", store=store_info.name or store_info.retailer_store_id,
+            store_index=stores_scanned, stores_total=len(stores),
+            products_checked=products_checked, errors_count=errors_count,
         )
 
         for department in departments:
-            department_id = db.upsert_department(
-                conn, retailer_id, department.retailer_department_id, department.name,
-                parent_department_id=None,  # resolved lazily; parent linkage is a nice-to-have, not load-bearing
-            )
+            department_id = department_ids[department.retailer_department_id]
             departments_scanned += 1
 
             last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
@@ -161,25 +203,36 @@ def run_scan(
                 department.name, len(product_refs),
                 "from cache" if cache_is_fresh else "freshly listed",
             )
+            _progress(
+                phase="prices", department=department.name,
+                department_index=departments_scanned, departments_total=len(departments),
+                department_products_total=len(product_refs), department_products_checked=0,
+                products_checked=products_checked, errors_count=errors_count,
+            )
 
             scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "prices", trigger)
             department_hits = 0
             department_errors = 0
-            for i, product_ref in enumerate(product_refs, start=1):
-                limiter.wait_before_next_request()
-                try:
-                    observation = adapter.check_price(browser_ctx, product_ref, store_info)
-                    limiter.record_success()
-                except PermissionError:
-                    limiter.record_403()
+            # check_prices() (not the old per-item check_price() loop) --
+            # the default implementation on RetailerAdapter behaves
+            # identically to the old loop, but HomeDepotAdapter overrides
+            # it with real wave-based batched+concurrent requests (modeled
+            # on HDScanner's own validated approach: ~90x fewer round
+            # trips for the same work). Pacing between batches/waves is
+            # now the adapter's own concern -- `limiter` is still passed
+            # through so 403/success events keep landing in the same
+            # rate_limit_event log regardless of which implementation runs.
+            for i, result in enumerate(
+                adapter.check_prices(browser_ctx, product_refs, store_info, limiter), start=1
+            ):
+                if result.error:
+                    logger.error("Failed checking price for %s: %s", result.product_ref.retailer_product_id, result.error)
                     errors_count += 1
                     department_errors += 1
                     continue
-                except Exception:
-                    logger.exception("Failed checking price for %s", product_ref.retailer_product_id)
-                    errors_count += 1
-                    department_errors += 1
-                    continue
+
+                observation = result.observation
+                product_ref = result.product_ref
 
                 product_id = db.upsert_product(
                     conn, retailer_id, product_ref.retailer_product_id, product_ref.name,
@@ -212,16 +265,33 @@ def run_scan(
 
                 products_checked += 1
 
-                # Heartbeat every 10 items so a long department still shows
-                # live progress, not just a start/end log line.
+                # Heartbeat every 10 results so a long department still
+                # shows live progress -- for a batching adapter these can
+                # arrive in bursts (one per wave) rather than a steady
+                # drip, which is fine, just less evenly spaced.
                 if i % 10 == 0 and i != len(product_refs):
                     logger.info("Department %r: checked %d/%d so far", department.name, i, len(product_refs))
+                    _progress(
+                        phase="prices", department=department.name,
+                        department_index=departments_scanned, departments_total=len(departments),
+                        department_products_total=len(product_refs), department_products_checked=i,
+                        products_checked=products_checked, errors_count=errors_count,
+                    )
 
             db.finish_scan_run(conn, scan_run_id, "completed", products_checked, errors_count)
             logger.info(
                 "Department %r: done -- %d checked, %d hit(s), %d error(s)",
                 department.name, len(product_refs), department_hits, department_errors,
             )
+            _progress(
+                phase="prices", department=department.name,
+                department_index=departments_scanned, departments_total=len(departments),
+                department_products_total=len(product_refs), department_products_checked=len(product_refs),
+                products_checked=products_checked, errors_count=errors_count,
+            )
+
+        if recycle_browser_ctx is not None:
+            browser_ctx = recycle_browser_ctx(browser_ctx)
 
     return {
         "stores_scanned": stores_scanned,
@@ -229,4 +299,5 @@ def run_scan(
         "products_checked": products_checked,
         "errors_count": errors_count,
         "new_deal_product_ids": new_deal_ids,
+        "browser_ctx": browser_ctx,
     }

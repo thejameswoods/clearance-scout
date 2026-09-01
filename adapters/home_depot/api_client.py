@@ -150,9 +150,9 @@ query aislebay($storeId: String!, $storeSkuIds: [String!]!) {
 
 
 class HomeDepotApiClient:
-    """Issues GraphQL calls through browser-extension/home_depot/'s content
-    script (see this module's docstring for why), bridged via
-    `window.postMessage` from a real homedepot.com page."""
+    """Issues GraphQL calls as a direct in-page fetch() via page.evaluate()
+    (see this module's docstring for why, and _wave_fetch for the
+    concurrent-batch variant that drives HomeDepotAdapter.check_prices())."""
 
     def __init__(self, browser_ctx: Any):
         self._ctx = browser_ctx
@@ -202,6 +202,75 @@ class HomeDepotApiClient:
                 f"Home Depot returned a non-JSON response for {operation} (status {result['status']})"
             ) from exc
 
+    def _wave_fetch(self, operation: str, bodies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fires all of `bodies` CONCURRENTLY from one page.evaluate() call
+        (a single JS Promise.all over N fetch() calls), instead of N
+        separate round trips from Python -- modeled on HDScanner's own
+        validated wave approach (Promise.all over parallel chunk fetches;
+        see checkSkuBatchLight in their background.js/content.js). Returns
+        one parsed-or-error dict per body, same order, same length --
+        a chunk that failed gets {"error": ..., "status": ...} in its slot
+        instead of raising, so one bad chunk in a wave doesn't lose the
+        rest of it."""
+        raw_results = self._page.evaluate(
+            """
+            ({ url, bodies }) => Promise.all(bodies.map((body) =>
+                fetch(url, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "x-experience-name": "general-merchandise",
+                    },
+                    body: JSON.stringify(body),
+                }).then(async (response) => ({ status: response.status, body: await response.text() }))
+                  .catch((e) => ({ status: 0, body: null, error: String(e) }))
+            ))
+            """,
+            {"url": f"{GRAPHQL_URL}?opname={operation}", "bodies": bodies},
+        )
+
+        parsed: list[dict[str, Any]] = []
+        for raw in raw_results:
+            if raw.get("status") == 0:
+                parsed.append({"error": f"Fetch failed: {raw.get('error')}", "status": 0})
+            elif raw["status"] in (403, 429):
+                parsed.append({"error": f"Home Depot (Akamai) returned {raw['status']}", "status": raw["status"]})
+            else:
+                try:
+                    parsed.append(json.loads(raw["body"]))
+                except ValueError:
+                    parsed.append({"error": f"Non-JSON response (status {raw['status']})", "status": raw["status"]})
+        return parsed
+
+    def media_price_inventory_wave(self, store_id: str, chunks: list[list[str]]) -> list[dict[str, Any]]:
+        """The concurrent-batch counterpart to media_price_inventory():
+        each element of `chunks` is its own <= PRICE_CHECK_MAX_BATCH-item
+        mediaPriceInventory call, all fired at once. Returns one response
+        dict per chunk, same order."""
+        for chunk in chunks:
+            if len(chunk) > PRICE_CHECK_MAX_BATCH:
+                raise ValueError(f"media_price_inventory_wave: max {PRICE_CHECK_MAX_BATCH} itemIds per chunk")
+        bodies = [
+            {"operationName": "mediaPriceInventory", "variables": {"itemIds": chunk, "storeId": store_id}, "query": MEDIA_PRICE_INVENTORY_QUERY}
+            for chunk in chunks
+        ]
+        return self._wave_fetch("mediaPriceInventory", bodies)
+
+    def product_detail_wave(self, store_id: str, item_ids: list[str]) -> list[dict[str, Any]]:
+        """The concurrent-batch counterpart to product_detail(): one
+        productClientOnlyProduct call per item_id, all fired at once
+        (there's no native multi-item variant of this query, unlike
+        mediaPriceInventory/aislebay -- confirmed real hit counts per wave
+        are small enough that N parallel single-item fetches is simpler
+        than GraphQL query aliasing for the same effect). Returns one
+        response dict per item_id, same order."""
+        bodies = [
+            {"operationName": "productClientOnlyProduct", "variables": {"itemId": item_id, "storeId": store_id}, "query": PRODUCT_QUERY}
+            for item_id in item_ids
+        ]
+        return self._wave_fetch("productClientOnlyProduct", bodies)
+
     def store_search(self, zip_code: str, radius_miles: float) -> dict[str, Any]:
         # radius_miles isn't a real storeSearch param (HDScanner doesn't use
         # one either -- pagesize=20 is the only result-count control) --
@@ -225,7 +294,19 @@ class HomeDepotApiClient:
                 "storeId": store_id, "navParam": nav_param,
                 "storefilter": "IN_STORE", "channel": "DESKTOP",
                 "isBrandPricingPolicyCompliant": False,
-                "additionalSearchParams": {"multiStoreIds": []},
+                # Confirmed live 2026-09-01 (GitHub issue #5): an empty
+                # multiStoreIds -- the previous default -- makes IN_STORE
+                # broaden to nearby-store availability too, not just this
+                # store (125 results for a real department that only has
+                # 93-94 actually at this store). Counter-intuitively,
+                # passing the store's OWN id here is what restricts to
+                # just it (confirmed: 125 -> 94, matching the real
+                # 93-result count within normal real-time inventory drift).
+                # No storefilter enum value did this -- every guessed
+                # alternative to "IN_STORE" was a clean GraphQL validation
+                # error (invalid enum name), so this isn't a storefilter
+                # question at all.
+                "additionalSearchParams": {"multiStoreIds": [store_id]},
                 "orderBy": {"field": "TOP_SELLERS", "order": "ASC"},
                 "ps": page_size, "si": start_index,
             },

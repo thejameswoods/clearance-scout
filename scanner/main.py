@@ -43,6 +43,13 @@ ZIP_CODE = os.environ["ZIP_CODE"]
 RADIUS_MILES = float(os.environ.get("RADIUS_MILES", "25"))
 WATCHED_DEPARTMENTS = _split_env_list("WATCHED_DEPARTMENTS")
 WATCH_KEYWORDS = _split_env_list("WATCH_KEYWORDS")
+# <= 0 disables the scheduled recurring scan entirely -- "Scan now"
+# (dashboard/bot) still works. Confirmed live 2026-09-01: the 4h interval
+# auto-retriggered a scan mid-development, on a container whose memory
+# hadn't recovered from the previous run, straight into the same
+# multi-hour timeout/degradation issue (GitHub issue #4) it was already
+# fighting. Useful default for production; actively unhelpful while
+# iterating or investigating a specific problem.
 SCAN_INTERVAL_MINUTES = float(os.environ.get("SCAN_INTERVAL_MINUTES", "240"))
 # Every container start otherwise kicks off a full scan immediately, which
 # is right for production (resume after a crash/restart) but actively
@@ -59,6 +66,10 @@ _trigger_event = threading.Event()
 _trigger_department: str | None = None
 _status_lock = threading.Lock()
 _status = {"last_scan_started_at": None, "last_scan_result": None, "state": "starting"}
+# Live checkpoint progress (store/department/counts) for the in-progress
+# scan -- see orchestrator.py's on_progress. Separate from _status's
+# start/end-of-scan summary; cleared at the start of each scan.
+_progress: dict = {}
 
 app = FastAPI(title="clearance-scout scanner (internal)")
 
@@ -71,7 +82,7 @@ def health():
 @app.get("/status")
 def status():
     with _status_lock:
-        return dict(_status)
+        return {**_status, "progress": dict(_progress)}
 
 
 @app.get("/logs")
@@ -116,10 +127,18 @@ def _run_http_server():
     server.run()
 
 
-def _scan_all(browser_ctx, trigger: str, department_filter: str | None) -> None:
+def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_browser_ctx):
+    """Returns the (possibly recycled) browser_ctx -- run_scan() may swap
+    it out mid-scan (see recycle_browser_ctx), so the caller's own
+    reference has to be updated from the result, not assumed unchanged."""
     with _status_lock:
         _status["last_scan_started_at"] = datetime.now(timezone.utc).isoformat()
         _status["state"] = "scanning"
+        _progress.clear()
+
+    def _on_progress(fields: dict) -> None:
+        with _status_lock:
+            _progress.update(fields)
 
     for slug in RETAILERS:
         adapter = build_adapter(slug)
@@ -130,7 +149,10 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None) -> None:
                     trigger=trigger, department_filter=department_filter,
                     watched_departments=WATCHED_DEPARTMENTS, watch_keywords=WATCH_KEYWORDS,
                     product_list_cache_hours=PRODUCT_LIST_CACHE_HOURS,
+                    recycle_browser_ctx=recycle_browser_ctx,
+                    on_progress=_on_progress,
                 )
+            browser_ctx = result.pop("browser_ctx", browser_ctx)
             logger.info("Scan complete for %s: %s", slug, result)
             with _status_lock:
                 _status["last_scan_result"] = {slug: result}
@@ -155,36 +177,57 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None) -> None:
     with _status_lock:
         _status["state"] = "idle"
 
+    return browser_ctx
+
+
+def _launch_browser_ctx(playwright):
+    # Manual --disable-blink-features / ignore_default_args flags weren't
+    # enough (confirmed live: Home Depot's real login API 403'd on the
+    # very first attempt, no request volume yet -- that's fingerprint-based
+    # detection, not rate-based). Those tells are JS-observable; the deeper
+    # leak is the CDP connection itself (Runtime.enable), which no amount
+    # of launch-arg tweaking touches. Patchright patches that at the driver
+    # level instead of the browser-args level -- this is its own documented
+    # "best practice" config (real Chrome via channel="chrome", no_viewport,
+    # no custom UA/headers); it already handles the automation-flag
+    # patching internally, more thoroughly than the manual flags did.
+    #
+    # No --load-extension here: Patchright silently strips that flag (and
+    # --disable-extensions-except) as part of its own anti-detection arg
+    # sanitization (confirmed via isolated diagnostic), so passing it is a
+    # no-op, not a degraded fallback. adapters/home_depot no longer depends
+    # on a loaded extension either way -- see api_client.py.
+    return playwright.chromium.launch_persistent_context(
+        PROFILE_DIR,
+        channel="chrome",
+        headless=False,  # a real, visible browser inside the container's Xvfb display
+        no_viewport=True,
+        args=["--no-sandbox", "--disable-dev-shm-usage"],
+    )
+
 
 def main() -> None:
     threading.Thread(target=_run_http_server, daemon=True).start()
 
     with sync_playwright() as playwright:
-        # Manual --disable-blink-features / ignore_default_args flags
-        # weren't enough (confirmed live: Home Depot's real login API
-        # 403'd on the very first attempt, no request volume yet -- that's
-        # fingerprint-based detection, not rate-based). Those tells are
-        # JS-observable; the deeper leak is the CDP connection itself
-        # (Runtime.enable), which no amount of launch-arg tweaking touches.
-        # Patchright patches that at the driver level instead of the
-        # browser-args level -- this is its own documented "best practice"
-        # config (real Chrome via channel="chrome", no_viewport, no custom
-        # UA/headers); it already handles the automation-flag patching
-        # internally, more thoroughly than the manual flags did.
-        #
-        # No --load-extension here: Patchright silently strips that flag
-        # (and --disable-extensions-except) as part of its own anti-detection
-        # arg sanitization (confirmed via isolated diagnostic), so passing it
-        # is a no-op, not a degraded fallback. adapters/home_depot no longer
-        # depends on a loaded extension either way -- see api_client.py.
-        browser_ctx = playwright.chromium.launch_persistent_context(
-            PROFILE_DIR,
-            channel="chrome",
-            headless=False,  # a real, visible browser inside the container's Xvfb display
-            no_viewport=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-        )
+        browser_ctx = _launch_browser_ctx(playwright)
         logger.info("Persistent browser context ready (profile: %s)", PROFILE_DIR)
+
+        def recycle_browser_ctx(old_ctx):
+            # Bounds the Patchright driver's per-request memory growth
+            # (confirmed live 2026-08-31/09-01, roughly linear with total
+            # request count, root cause still unresolved -- GitHub issue
+            # #4) to one store's worth of requests instead of letting it
+            # compound across an entire multi-store scan. Safe to do
+            # freely: this retailer doesn't require a logged-in session
+            # (see adapter.py's authenticate()), so there's no session
+            # state a fresh context would lose.
+            logger.info("Recycling browser context (new store) to bound per-scan memory growth")
+            try:
+                old_ctx.close()
+            except Exception:
+                logger.exception("Error closing old browser context (continuing anyway)")
+            return _launch_browser_ctx(playwright)
 
         first_iteration = True
         while True:
@@ -192,7 +235,10 @@ def main() -> None:
             if _trigger_event.is_set():
                 department_filter = _trigger_department
                 _trigger_event.clear()
-                _scan_all(browser_ctx, trigger="manual", department_filter=department_filter)
+                browser_ctx = _scan_all(
+                    browser_ctx, trigger="manual", department_filter=department_filter,
+                    recycle_browser_ctx=recycle_browser_ctx,
+                )
             elif first_iteration and not SCAN_ON_STARTUP:
                 logger.info(
                     "SCAN_ON_STARTUP=false -- skipping the immediate scan; "
@@ -201,8 +247,18 @@ def main() -> None:
                 with _status_lock:
                     _status["state"] = "idle"
             else:
-                _scan_all(browser_ctx, trigger="scheduled", department_filter=None)
+                browser_ctx = _scan_all(
+                    browser_ctx, trigger="scheduled", department_filter=None,
+                    recycle_browser_ctx=recycle_browser_ctx,
+                )
             first_iteration = False
+
+            if SCAN_INTERVAL_MINUTES <= 0:
+                # Scheduled auto-rescan disabled -- wait indefinitely for a
+                # manual trigger (dashboard "Scan now" / bot /scan).
+                while not _trigger_event.wait(timeout=5):
+                    pass
+                continue
 
             # Sleep in short increments so a trigger during the wait is
             # picked up promptly instead of after the full interval.

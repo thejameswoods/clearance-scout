@@ -81,6 +81,16 @@ class PriceObservation:
 
 
 @dataclass(frozen=True)
+class PriceCheckResult:
+    """One item's outcome from check_prices() -- a result wrapper, not a
+    raised exception, so a batch call can report a per-item failure
+    without the whole batch/wave dying because one item failed."""
+    product_ref: ProductRef
+    observation: PriceObservation | None = None
+    error: str | None = None  # None means success
+
+
+@dataclass(frozen=True)
 class AuthResult:
     valid: bool
     detail: str | None = None
@@ -144,6 +154,36 @@ class RetailerAdapter(ABC):
     ) -> PriceObservation:
         """Phase 3: a single product's current price/clearance/penny state
         at one store."""
+
+    def check_prices(
+        self, browser_ctx: Any, product_refs: list[ProductRef], store: StoreInfo,
+        rate_limiter: Any,
+    ) -> Iterator[PriceCheckResult]:
+        """Batch phase 3. Default: one check_price() call per product,
+        paced by `rate_limiter` (a scanner.ratelimit.RateLimiter -- typed
+        Any here to avoid a circular import, same reason browser_ctx is
+        Any). This preserves the original per-item behavior exactly, so an
+        adapter that doesn't override this keeps working unchanged.
+
+        Override this for real batching (see HomeDepotAdapter, modeled on
+        HDScanner's own validated wave approach: concurrent batched
+        requests instead of one item at a time, confirmed ~90x faster in
+        practice). Pacing for an override becomes the adapter's own
+        concern rather than living in this generic default -- the
+        validated batch size, concurrency, and backoff cadence are all
+        retailer-specific numbers, not a generic formula.
+        """
+        for ref in product_refs:
+            rate_limiter.wait_before_next_request()
+            try:
+                observation = self.check_price(browser_ctx, ref, store)
+                rate_limiter.record_success()
+                yield PriceCheckResult(product_ref=ref, observation=observation)
+            except PermissionError as exc:
+                rate_limiter.record_403()
+                yield PriceCheckResult(product_ref=ref, error=str(exc))
+            except Exception as exc:
+                yield PriceCheckResult(product_ref=ref, error=str(exc))
 
     @abstractmethod
     def detect_clearance(self, raw_response: dict[str, Any]) -> ClearanceSignal | None:
