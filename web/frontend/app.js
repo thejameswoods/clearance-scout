@@ -27,6 +27,22 @@ function mapsLink(address) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 
+// A product link with no store param opens the retailer's default/nearest
+// store's price, not the one the deal was actually found at -- confirmed
+// live 2026-09-01. `retailer_store_id` is the retailer's own store number
+// (e.g. Home Depot's storeId), matching this app's existing ?store=NNNN
+// convention for that GraphQL param (see adapters/home_depot/api_client.py).
+function productLink(url, retailerStoreId) {
+  if (!url) return "#";
+  if (!retailerStoreId) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}store=${encodeURIComponent(retailerStoreId)}`;
+}
+
+function stockText(row) {
+  return row.stock_quantity != null ? `${row.stock_quantity} left` : "";
+}
+
 function priceRangeText(rows) {
   const prices = rows.map((r) => r.price_cents);
   const lo = Math.min(...prices), hi = Math.max(...prices);
@@ -136,7 +152,8 @@ async function loadDeals() {
 function renderStoreLineHtml(productId, rows) {
   if (rows.length === 1) {
     const r = rows[0];
-    return `${escapeHtml(r.store_name || r.retailer_store_id)}${r.aisle ? ` · Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""}`;
+    const stock = stockText(r);
+    return `${escapeHtml(r.store_name || r.retailer_store_id)}${r.aisle ? ` · Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""}${stock ? ` · ${stock}` : ""}`;
   }
   return `<span class="dv-expand-toggle" data-toggle-for="${productId}">▾ ${rows.length} of ${rows.length} stores</span>`;
 }
@@ -160,7 +177,7 @@ function renderDealsTable(groups) {
       ${first.image_url ? `<img class="dv-thumb" src="${first.image_url}" alt="">` : `<div class="dv-thumb-placeholder"></div>`}
       <div class="dv-body">
         <div class="dv-name">
-          <a href="${cheapest.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(first.product_name)}</a>
+          <a href="${productLink(cheapest.canonical_url, cheapest.retailer_store_id)}" target="_blank" rel="noopener">${escapeHtml(first.product_name)}</a>
           ${rows.length > 1 ? `<span class="dv-store-badge">↗ ${escapeHtml(cheapest.retailer_store_id || "")}</span>` : ""}
         </div>
         <div class="dv-subline">${first.department_name ? escapeHtml(first.department_name) + " · " : ""}SKU ${escapeHtml(first.retailer_product_id)}</div>
@@ -177,6 +194,7 @@ function renderDealsTable(groups) {
       </div>
       <div class="dv-discount">${dvDiscountTag(rows)}</div>
       <div class="dv-actions">
+        <button class="dv-refresh-btn" data-product="${productId}" type="button" title="Check this item across every store, right now">⟳</button>
         ${isDeferred ? `
           <div class="dv-plain-actions">
             <button class="undefer-btn" data-deal="${cheapest.deal_id}">Change</button>
@@ -208,8 +226,8 @@ function renderDealsTable(groups) {
         .map(
           (r) => `
           <div class="dv-expand-item">
-            <a href="${r.canonical_url || "#"}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
-            <span class="dv-expand-meta">${r.aisle ? `Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""} · ` : ""}detected ${relTime(r.created_at)}</span>
+            <a href="${productLink(r.canonical_url, r.retailer_store_id)}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
+            <span class="dv-expand-meta">${r.aisle ? `Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""} · ` : ""}${stockText(r) ? stockText(r) + " · " : ""}detected ${relTime(r.created_at)}</span>
             <span class="dv-expand-price">${money(r.price_cents)}</span>
             <button class="add-store-btn" data-deal="${r.deal_id}">Add to this store's list</button>
           </div>`
@@ -269,6 +287,77 @@ function wireDealRowActions(list) {
       toggleNotYetPanel(btn);
     })
   );
+  list.querySelectorAll(".dv-refresh-btn").forEach((btn) =>
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      startProductRefresh(btn);
+    })
+  );
+}
+
+// Queued on the scanner side (scanner/main.py's _refresh_queue), so
+// clicking this on several rows in a row is safe -- each just joins the
+// queue instead of racing the scanner's one shared browser_ctx.
+async function startProductRefresh(btn) {
+  if (btn.disabled) return;
+  const productId = btn.dataset.product;
+  btn.disabled = true;
+  btn.classList.add("spinning");
+  let res;
+  try {
+    res = await api(`/api/products/${productId}/refresh`, { method: "POST" });
+  } catch (e) {
+    btn.disabled = false;
+    btn.classList.remove("spinning");
+    showRefreshResult(btn, `Failed to queue: ${e.message}`);
+    return;
+  }
+  if (!res.queued && res.error) {
+    btn.disabled = false;
+    btn.classList.remove("spinning");
+    showRefreshResult(btn, `Failed: ${res.error}`);
+    return;
+  }
+  // res.queued === false with no error means it was already queued/running
+  // (e.g. a second click) -- just keep polling the existing one.
+  pollProductRefresh(btn, productId);
+}
+
+async function pollProductRefresh(btn, productId) {
+  for (let i = 0; i < 200; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    let status;
+    try {
+      status = await api(`/api/products/${productId}/refresh-status`);
+    } catch (e) {
+      break;
+    }
+    if (status.state === "queued" || status.state === "running") continue;
+
+    btn.disabled = false;
+    btn.classList.remove("spinning");
+    if (status.state === "done" && status.result) {
+      const r = status.result;
+      showRefreshResult(btn, `Checked ${r.checked}/${r.stores_total} store(s) -- ${r.hits} hit(s)${r.errors ? `, ${r.errors} error(s)` : ""}.`);
+      loadDeals();
+      loadTree();
+    } else {
+      showRefreshResult(btn, "Refresh failed -- see Logs.");
+    }
+    return;
+  }
+  btn.disabled = false;
+  btn.classList.remove("spinning");
+  showRefreshResult(btn, "Still running after several minutes -- check the Logs tab.");
+}
+
+function showRefreshResult(btn, text) {
+  document.querySelectorAll(".dv-refresh-tooltip").forEach((el) => el.remove());
+  const tip = document.createElement("div");
+  tip.className = "dv-refresh-tooltip";
+  tip.textContent = text;
+  btn.closest(".dv-actions").appendChild(tip);
+  setTimeout(() => tip.remove(), 6000);
 }
 
 function toggleNotYetPanel(caretBtn) {
@@ -283,13 +372,10 @@ function toggleNotYetPanel(caretBtn) {
   panel.dataset.deal = dealId;
   panel.innerHTML = `
     <div class="panel-label">Not yet — tell me again when…</div>
-    <label><input type="radio" name="ny-type" value="discount_pct" checked>
+    <label class="ny-slider-row"><input type="radio" name="ny-type" value="discount_pct" checked>
       Discount reaches
-      <select id="ny-discount-select">
-        <option value="70">70%</option><option value="75">75%</option>
-        <option value="80" selected>80%</option><option value="85">85%</option>
-        <option value="90">90%</option>
-      </select> or better
+      <input type="range" id="ny-discount-slider" min="10" max="95" step="5" value="50">
+      <span id="ny-discount-value">50%</span> or better
     </label>
     <label><input type="radio" name="ny-type" value="price"> Price drops below
       $<input type="number" id="ny-price" min="0" step="0.01" value="3.00" style="width:70px"></label>
@@ -305,6 +391,9 @@ function toggleNotYetPanel(caretBtn) {
   caretBtn.closest(".dv-actions").appendChild(panel);
   panel.addEventListener("click", (ev) => ev.stopPropagation());
 
+  panel.querySelector("#ny-discount-slider").addEventListener("input", (ev) => {
+    panel.querySelector("#ny-discount-value").textContent = `${ev.target.value}%`;
+  });
   panel.querySelector("#ny-cancel").addEventListener("click", closeNotYetPanel);
   panel.querySelector("#ny-set").addEventListener("click", async () => {
     const type = panel.querySelector('input[name="ny-type"]:checked').value;
@@ -315,7 +404,7 @@ function toggleNotYetPanel(caretBtn) {
       recordLastAction({ type: "dismiss", productId, label: `dismissed: ${productName}` });
     } else {
       const value = type === "discount_pct"
-        ? Number(panel.querySelector("#ny-discount-select").value)
+        ? Number(panel.querySelector("#ny-discount-slider").value)
         : type === "price" ? Number(panel.querySelector("#ny-price").value) : null;
       await api(`/api/deals/${dealId}/defer`, {
         method: "POST",
@@ -393,7 +482,7 @@ function openProductDetail(productId) {
           <td>
             <div class="product-name">${escapeHtml(r.product_name)}</div>
             ${r.department_name ? `<div class="product-dept">${escapeHtml(r.department_name)}</div>` : ""}
-            ${r.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${r.canonical_url}">View item &rarr;</a>` : ""}
+            ${r.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${productLink(r.canonical_url, r.retailer_store_id)}">View item &rarr;</a>` : ""}
           </td>
           <td>${money(r.price_cents)}${r.list_price_cents ? `<div class="product-dept">was ${money(r.list_price_cents)}</div>` : ""}</td>
           <td>${discountBadge([r])}</td>
@@ -492,7 +581,7 @@ async function loadShoppingList() {
             <div class="name">
               ${escapeHtml(item.product_name)}
               ${aisleText ? `<div class="product-dept">${aisleText}</div>` : ""}
-              ${item.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${item.canonical_url}">View item &rarr;</a>` : ""}
+              ${item.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${productLink(item.canonical_url, item.retailer_store_id)}">View item &rarr;</a>` : ""}
             </div>
             <div class="price">${money(item.price_cents)}</div>
             <button class="secondary shopping-bought-btn" data-deal="${item.deal_id}">Bought</button>
@@ -956,7 +1045,20 @@ async function loadSettings() {
     <h3>Scan configuration</h3>
     ${scanConfig.error ? `<p class="meta">${escapeHtml(scanConfig.error)}</p>` : scanConfigFormHtml(scanConfig)}
     <h3>Retailers</h3>
-    <ul>${retailers.map((r) => `<li>${r.display_name} (${r.slug})</li>`).join("") || "<li>None configured yet</li>"}</ul>
+    ${retailers.length ? `
+      <div class="settings-form" style="max-width:420px">
+        ${retailers.map((r) => `
+          <label>${escapeHtml(r.display_name)} (${escapeHtml(r.slug)}) -- minimum discount %
+            <span style="display:flex;gap:8px;align-items:center">
+              <input type="number" min="0" max="100" step="1" class="retailer-min-discount" data-retailer="${r.id}"
+                     value="${r.min_discount_pct ?? ""}" placeholder="no floor" style="max-width:100px">
+              <button type="button" class="secondary retailer-min-discount-save" data-retailer="${r.id}">Save</button>
+              <span class="meta retailer-min-discount-status" data-retailer="${r.id}"></span>
+            </span>
+          </label>
+        `).join("")}
+      </div>
+    ` : `<p class="meta">None configured yet</p>`}
     <h3>Telegram</h3>
     <dl>
       <dt>Alerts sent</dt><dd>${telegram.alerts_sent}</dd>
@@ -966,6 +1068,29 @@ async function loadSettings() {
   `;
   setupScanConfigForm();
   setupDataTools();
+  setupRetailerMinDiscount();
+}
+
+function setupRetailerMinDiscount() {
+  $$(".retailer-min-discount-save").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const retailerId = btn.dataset.retailer;
+      const input = $(`.retailer-min-discount[data-retailer="${retailerId}"]`);
+      const statusEl = $(`.retailer-min-discount-status[data-retailer="${retailerId}"]`);
+      const raw = input.value.trim();
+      statusEl.textContent = "Saving…";
+      try {
+        await api(`/api/settings/retailers/${retailerId}/min-discount`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ min_discount_pct: raw === "" ? null : Number(raw) }),
+        });
+        statusEl.textContent = raw === "" ? "Saved -- no floor." : "Saved.";
+      } catch (e) {
+        statusEl.textContent = `Failed: ${e.message}`;
+      }
+    })
+  );
 }
 
 function escapeHtml(value) {

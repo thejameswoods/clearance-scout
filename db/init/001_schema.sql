@@ -3,11 +3,17 @@
 -- zero schema changes, only a new `retailer` row.
 
 CREATE TABLE retailer (
-    id              SERIAL PRIMARY KEY,
-    slug            TEXT NOT NULL UNIQUE,       -- e.g. 'home_depot'
-    display_name    TEXT NOT NULL,
-    base_url        TEXT NOT NULL,
-    adapter_version TEXT NOT NULL DEFAULT '0'
+    id                SERIAL PRIMARY KEY,
+    slug              TEXT NOT NULL UNIQUE,       -- e.g. 'home_depot'
+    display_name      TEXT NOT NULL,
+    base_url          TEXT NOT NULL,
+    adapter_version   TEXT NOT NULL DEFAULT '0',
+    -- NULL = no floor (show everything). Applied as list_deals' default
+    -- discount-pct floor for this retailer's deals -- confirmed live
+    -- 2026-09-01: without one, real-but-marginal 10%-off "clearance"
+    -- buries the deals actually worth a trip. An explicit min_discount_pct
+    -- filter on a request overrides this per-request, doesn't stack with it.
+    min_discount_pct  DOUBLE PRECISION
 );
 
 CREATE TABLE store (

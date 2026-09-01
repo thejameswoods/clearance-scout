@@ -61,6 +61,21 @@ def test_retailer_store_tree_excludes_dismissed_products(postgres_conn):
     assert tree[0]["total"] == 0
 
 
+def test_retailer_total_counts_a_multi_store_product_once(postgres_conn):
+    """Confirmed live 2026-09-01: a single product on sale at 2 stores
+    showed as 2 in the sidebar -- the retailer total was a Python sum of
+    each store's own (correctly per-store) count, which double-counts
+    anything carried at more than one store."""
+    _seed(postgres_conn, store_id_str="s1", sku="sku-1")
+    _seed(postgres_conn, store_id_str="s2", sku="sku-1")  # same SKU, second store
+
+    tree = queries.retailer_store_tree(postgres_conn)
+
+    assert tree[0]["total"] == 1  # one product, not two
+    per_store = {s["retailer_store_id"]: s["open_count"] for s in tree[0]["stores"]}
+    assert per_store == {"s1": 1, "s2": 1}  # each store's own count is still correct
+
+
 # --- department_tree_with_counts -------------------------------------------
 
 def test_department_tree_rolls_counts_up_to_ancestors(postgres_conn):
@@ -91,6 +106,24 @@ def test_department_tree_rolls_counts_up_to_ancestors(postgres_conn):
     # expanded, department.parent_department_id-blind or not.
     assert by_name["Electrical"]["parent"] is None
     assert by_name["Electrical Batteries"]["parent"] == "Electrical"
+
+
+def test_department_count_counts_a_multi_store_product_once(postgres_conn):
+    retailer_id = db.upsert_retailer(postgres_conn, "home_depot", "Home Depot", "https://example.invalid")
+    store_a = db.upsert_store(postgres_conn, retailer_id, "store-a", "00000", "Store A", None)
+    store_b = db.upsert_store(postgres_conn, retailer_id, "store-b", "00000", "Store B", None)
+    dept_id = db.upsert_department(postgres_conn, retailer_id, "Electrical", "Electrical", None)
+    product_id = db.upsert_product(postgres_conn, retailer_id, "sku-1", "Item", dept_id, None, None)
+    for store_id in (store_a, store_b):
+        obs_id = db.insert_price_observation(
+            postgres_conn, product_id, store_id, None, datetime.now(timezone.utc),
+            price_cents=500, list_price_cents=1000, is_clearance=True, is_penny=False,
+            fulfillment_state="in_stock", stock_quantity=5, raw_signal={},
+        )
+        db.upsert_deal_from_observation(postgres_conn, product_id, store_id, obs_id, True, False)
+
+    tree = queries.department_tree_with_counts(postgres_conn, "home_depot")  # no store_id -- "all stores"
+    assert tree[0]["count"] == 1
 
 
 def test_department_tree_scoped_to_one_store(postgres_conn):
@@ -125,6 +158,14 @@ def test_status_bar_counts_buckets_correctly(postgres_conn):
 
     counts = queries.status_bar_counts(postgres_conn)
     assert counts == {"active": 1, "waiting": 1, "all": 2}
+
+
+def test_status_bar_counts_a_multi_store_product_once(postgres_conn):
+    _seed(postgres_conn, store_id_str="s1", sku="sku-1")
+    _seed(postgres_conn, store_id_str="s2", sku="sku-1")
+
+    counts = queries.status_bar_counts(postgres_conn)
+    assert counts == {"active": 1, "waiting": 0, "all": 1}
 
 
 # --- list_deals: new filters -------------------------------------------------
@@ -208,3 +249,61 @@ def test_defer_route_rejects_bad_type(client, postgres_conn):
 
     resp = client.post(f"/api/deals/{deal_id}/defer", json={"type": "bogus", "value": 1})
     assert resp.status_code == 400
+
+
+# --- retailer.min_discount_pct ----------------------------------------------
+
+def test_list_deals_applies_retailer_min_discount_by_default(postgres_conn):
+    retailer_id, _, _, _ = _seed(postgres_conn, sku="low", price_cents=900, list_price_cents=1000)  # 10% off
+    _seed(postgres_conn, sku="high", price_cents=200, list_price_cents=1000)  # 80% off
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 50)
+
+    rows = queries.list_deals(postgres_conn)
+
+    assert {r["retailer_product_id"] for r in rows} == {"high"}
+
+
+def test_list_deals_retailer_min_discount_exempts_penny(postgres_conn):
+    retailer_id, store_id, dept_id, product_id = _seed(postgres_conn, sku="penny", price_cents=1, list_price_cents=None)
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 50)
+    postgres_conn.execute("UPDATE price_observation SET is_penny = true WHERE product_id = %s", (product_id,))
+
+    rows = queries.list_deals(postgres_conn)
+    assert len(rows) == 1
+
+
+def test_list_deals_explicit_filter_overrides_retailer_default(postgres_conn):
+    retailer_id, _, _, _ = _seed(postgres_conn, sku="low", price_cents=900, list_price_cents=1000)  # 10% off
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 50)
+
+    # An explicit (even lower) request-level filter replaces the default
+    # rather than stacking with it -- deliberately lets someone look below
+    # their own configured floor.
+    rows = queries.list_deals(postgres_conn, min_discount_pct=5)
+    assert len(rows) == 1
+
+
+def test_status_bar_counts_applies_retailer_min_discount(postgres_conn):
+    retailer_id, _, _, _ = _seed(postgres_conn, sku="low", price_cents=900, list_price_cents=1000)
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 50)
+
+    counts = queries.status_bar_counts(postgres_conn)
+    assert counts == {"active": 0, "waiting": 0, "all": 0}
+
+
+def test_set_retailer_min_discount_pct_clears_with_none(postgres_conn):
+    retailer_id = db.upsert_retailer(postgres_conn, "home_depot", "Home Depot", "https://example.invalid")
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 60)
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, None)
+
+    row = postgres_conn.execute("SELECT min_discount_pct FROM retailer WHERE id = %s", (retailer_id,)).fetchone()
+    assert row["min_discount_pct"] is None
+
+
+def test_update_retailer_min_discount_route(client, postgres_conn):
+    retailer_id = db.upsert_retailer(postgres_conn, "home_depot", "Home Depot", "https://example.invalid")
+
+    resp = client.put(f"/api/settings/retailers/{retailer_id}/min-discount", json={"min_discount_pct": 40})
+    assert resp.status_code == 200
+    row = postgres_conn.execute("SELECT min_discount_pct FROM retailer WHERE id = %s", (retailer_id,)).fetchone()
+    assert row["min_discount_pct"] == 40

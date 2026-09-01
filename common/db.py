@@ -42,6 +42,14 @@ def upsert_retailer(conn, slug: str, display_name: str, base_url: str, adapter_v
     return row["id"]
 
 
+def set_retailer_min_discount_pct(conn, retailer_id: int, min_discount_pct: float | None) -> None:
+    """Settings tab's per-retailer minimum-discount floor -- None clears
+    it back to "no floor". See list_deals/status_bar_counts for how it's
+    applied (a default, overridden outright by an explicit request-level
+    min_discount_pct filter, not stacked with it)."""
+    conn.execute("UPDATE retailer SET min_discount_pct = %s WHERE id = %s", (min_discount_pct, retailer_id))
+
+
 def upsert_store(conn, retailer_id: int, retailer_store_id: str, zip_code: str,
                   name: str | None, address: str | None) -> int:
     row = conn.execute(

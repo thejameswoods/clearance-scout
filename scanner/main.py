@@ -20,7 +20,7 @@ from patchright.sync_api import sync_playwright
 from adapters.registry import build_adapter
 from common import db
 from scanner.log_buffer import RingBufferLogHandler
-from scanner.orchestrator import ScanAbortedNeedsLogin, repair_missing_enrichment, run_scan
+from scanner.orchestrator import ScanAbortedNeedsLogin, refresh_single_product, repair_missing_enrichment, run_scan
 from scanner.settings import merge_settings, split_list
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -105,6 +105,15 @@ _repair_limit: int | None = None
 _repair_status = {"state": "idle", "last_run_result": None}
 DEFAULT_REPAIR_LIMIT = 50  # an on-demand tool hitting a real retailer API -- default to a conservative batch, not "however many are missing."
 
+# "Refresh this one item everywhere" -- a real QUEUE (list), not a single
+# trigger flag like the ones above, specifically so someone can "mash the
+# button" across many products from the dashboard without a second click
+# clobbering the first one's request. _refresh_status is keyed per
+# product_id so each dashboard row can poll its own outcome independently
+# instead of a single shared status blowing away another row's result.
+_refresh_queue: list[int] = []
+_refresh_status: dict[int, dict] = {}
+
 app = FastAPI(title="clearance-scout scanner (internal)")
 
 
@@ -160,6 +169,24 @@ def repair_missing_data(limit: int | None = DEFAULT_REPAIR_LIMIT):
 def repair_status():
     with _status_lock:
         return dict(_repair_status)
+
+
+@app.post("/refresh-product")
+def refresh_product(product_id: int):
+    with _status_lock:
+        already_pending = product_id in _refresh_queue or _refresh_status.get(product_id, {}).get("state") == "running"
+        if already_pending:
+            return {"queued": False, "reason": "already queued or in progress"}
+        _refresh_queue.append(product_id)
+        _refresh_status[product_id] = {"state": "queued", "result": None}
+        position = len(_refresh_queue)
+    return {"queued": True, "position": position}
+
+
+@app.get("/refresh-status")
+def refresh_status(product_id: int):
+    with _status_lock:
+        return _refresh_status.get(product_id, {"state": "unknown", "result": None})
 
 
 def _run_http_server():
@@ -252,6 +279,36 @@ def _repair_all(browser_ctx, limit: int | None):
     return browser_ctx
 
 
+def _refresh_one(browser_ctx, product_id: int):
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT r.slug FROM product p JOIN retailer r ON r.id = p.retailer_id WHERE p.id = %s",
+            (product_id,),
+        ).fetchone()
+    if not row:
+        logger.warning("Refresh: no product with id %s", product_id)
+        with _status_lock:
+            _refresh_status[product_id] = {"state": "error", "result": None}
+        return browser_ctx
+
+    adapter = build_adapter(row["slug"])
+    try:
+        with db.get_connection() as conn:
+            result = refresh_single_product(conn, browser_ctx, adapter, product_id)
+        logger.info("Refresh complete for product %s: %s", product_id, result)
+        with _status_lock:
+            _refresh_status[product_id] = {"state": "done", "result": result}
+    except Exception:
+        # Same posture as _scan_all/_repair_all -- never crash the process
+        # over a single bad run; the next queued (or re-clicked) refresh
+        # gets a clean attempt regardless of this one's outcome.
+        logger.exception("Refresh failed for product %s", product_id)
+        with _status_lock:
+            _refresh_status[product_id] = {"state": "error", "result": None}
+
+    return browser_ctx
+
+
 def _launch_browser_ctx(playwright):
     # Manual --disable-blink-features / ignore_default_args flags weren't
     # enough (confirmed live: Home Depot's real login API 403'd on the
@@ -305,7 +362,16 @@ def main() -> None:
         while True:
             settings = _current_settings()  # fresh each cycle -- see that function's docstring
             department_filter = None
-            if _repair_trigger_event.is_set():
+            if _refresh_queue:
+                # Ahead of repair/scan -- a single-item refresh is small,
+                # quick, and directly user-initiated ("I'm looking at this
+                # right now"), so it shouldn't queue behind a long repair
+                # or scan run that's about to start.
+                with _status_lock:
+                    product_id = _refresh_queue.pop(0)
+                    _refresh_status[product_id] = {"state": "running", "result": None}
+                browser_ctx = _refresh_one(browser_ctx, product_id)
+            elif _repair_trigger_event.is_set():
                 limit = _repair_limit
                 _repair_trigger_event.clear()
                 browser_ctx = _repair_all(browser_ctx, limit)
@@ -332,9 +398,9 @@ def main() -> None:
 
             if settings["scan_interval_minutes"] <= 0:
                 # Scheduled auto-rescan disabled -- wait indefinitely for a
-                # manual trigger (dashboard "Scan now" / bot /scan) or a
-                # repair trigger.
-                while not (_trigger_event.is_set() or _repair_trigger_event.is_set()):
+                # manual trigger (dashboard "Scan now" / bot /scan), a
+                # repair trigger, or a queued refresh.
+                while not (_trigger_event.is_set() or _repair_trigger_event.is_set() or _refresh_queue):
                     time.sleep(5)
                 continue
 
@@ -342,7 +408,7 @@ def main() -> None:
             # picked up promptly instead of after the full interval.
             deadline = time.monotonic() + settings["scan_interval_minutes"] * 60
             while time.monotonic() < deadline:
-                if _trigger_event.is_set() or _repair_trigger_event.is_set():
+                if _trigger_event.is_set() or _repair_trigger_event.is_set() or _refresh_queue:
                     break
                 time.sleep(5)
 

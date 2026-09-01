@@ -321,11 +321,12 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   --dv-condensed: "Barlow Condensed", sans-serif;
   --dv-body: "Barlow", -apple-system, BlinkMacSystemFont, sans-serif;
   font-family: var(--dv-body);
+  font-size: 15px; /* every rule below is still rem, which ignores this and is relative to <html> regardless of nesting -- each one was bumped directly instead (confirmed live 2026-09-01, this tab was uncomfortably small: "running at 120% zoom just to be comfortable") */
 }
 
 .deals-layout { display: flex; gap: 24px; align-items: flex-start; }
 .deals-sidebar {
-  flex: 0 0 252px;
+  flex: 0 0 264px;
   border-right: 1px solid var(--dv-border);
   padding-right: 16px;
   position: sticky;
@@ -336,51 +337,51 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .sidebar-section { margin-bottom: 22px; }
 .sidebar-label {
   font-family: var(--dv-mono);
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--dv-text-dim);
-  margin-bottom: 6px;
+  margin-bottom: 7px;
 }
 #dept-filter {
   width: 100%;
-  padding: 5px 8px;
-  margin-bottom: 6px;
+  padding: 7px 9px;
+  margin-bottom: 7px;
   border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius);
   background: var(--dv-card);
   color: var(--dv-text);
   font-family: var(--dv-body);
-  font-size: 0.8rem;
+  font-size: 0.92rem;
 }
 
 .tree { display: flex; flex-direction: column; }
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
+  gap: 5px;
+  padding: 5px 7px;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 0.84rem;
+  font-size: 0.96rem;
   line-height: 1.5;
 }
 .tree-row:hover { background: rgba(0,0,0,0.03); }
 .tree-row.selected { background: var(--dv-accent-tint); color: var(--dv-accent-dark); font-weight: 600; }
 .tree-row.zero { color: var(--dv-text-dim); opacity: 0.55; }
-.tree-row.indent { padding-left: 20px; }
-.tree-toggle { width: 13px; flex-shrink: 0; color: var(--dv-text-dim); font-size: 0.68rem; text-align: center; cursor: pointer; }
+.tree-row.indent { padding-left: 22px; }
+.tree-toggle { width: 15px; flex-shrink: 0; color: var(--dv-text-dim); font-size: 0.8rem; text-align: center; cursor: pointer; }
 .tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--dv-condensed); font-weight: 600; }
-.tree-count { font-family: var(--dv-mono); font-size: 0.74rem; color: var(--dv-text-dim); flex-shrink: 0; }
+.tree-count { font-family: var(--dv-mono); font-size: 0.86rem; color: var(--dv-text-dim); flex-shrink: 0; }
 .tree-row.selected .tree-count { color: var(--dv-accent-dark); }
 
 .scope-bar {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
-  font-size: 0.84rem;
+  font-size: 0.96rem;
 }
 .scope-breadcrumb { color: var(--dv-text-dim); }
 .scope-breadcrumb strong { color: var(--dv-text); font-weight: 700; }
@@ -390,38 +391,38 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   border: 1px solid var(--dv-border);
   color: var(--dv-text-dim);
   border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 0.72rem;
+  padding: 4px 12px;
+  font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;
 }
 .tag-toggle.on { border-color: var(--dv-accent); color: var(--dv-accent-dark); }
 
-.dv-filters-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.dv-filters-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 .dv-input {
   font-family: var(--dv-body);
-  padding: 7px 10px;
+  padding: 8px 11px;
   border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius);
   background: var(--dv-card);
   color: var(--dv-text);
-  font-size: 0.82rem;
+  font-size: 0.94rem;
 }
 .dv-search { flex: 1; min-width: 220px; }
-.dv-input-sm { width: 76px; }
+.dv-input-sm { width: 84px; }
 .dv-select {
   font-family: var(--dv-body);
-  padding: 6px 8px;
+  padding: 7px 9px;
   border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius);
   background: var(--dv-card);
   color: var(--dv-text);
-  font-size: 0.82rem;
+  font-size: 0.94rem;
 }
-.dv-sort-control { display: flex; align-items: center; gap: 6px; }
+.dv-sort-control { display: flex; align-items: center; gap: 7px; }
 .dv-label-inline {
   font-family: var(--dv-mono);
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dv-text-dim);
@@ -430,8 +431,8 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   font-family: var(--dv-body);
   cursor: pointer;
   border-radius: var(--dv-radius);
-  padding: 7px 12px;
-  font-size: 0.82rem;
+  padding: 8px 14px;
+  font-size: 0.94rem;
   font-weight: 600;
   border: 1px solid transparent;
 }
@@ -444,9 +445,9 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   background: var(--dv-accent);
   color: white;
   border-radius: 999px;
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  padding: 1px 6px;
+  padding: 1px 7px;
   margin: 0 4px;
 }
 .dv-filters-count[hidden] { display: none; }
@@ -456,29 +457,29 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   right: 0;
   margin-top: 4px;
   z-index: 25;
-  width: 240px;
+  width: 260px;
   max-width: calc(100vw - 32px);
   background: var(--dv-card);
   border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius);
   box-shadow: 0 8px 20px rgba(0,0,0,0.12);
-  padding: 12px;
-  font-size: 0.82rem;
+  padding: 14px;
+  font-size: 0.94rem;
 }
-.dv-popover .dv-check { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.dv-popover .dv-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dv-popover .dv-check { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.dv-popover .dv-field { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 9px; }
 .dv-filters-clear { width: 100%; margin-top: 4px; }
 
-.dv-status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
-.status-bar { display: flex; gap: 6px; flex-wrap: wrap; }
+.dv-status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.status-bar { display: flex; gap: 7px; flex-wrap: wrap; }
 .status-tag {
   font-family: var(--dv-body);
   background: var(--dv-card);
   border: 1px solid var(--dv-border);
   color: var(--dv-text-dim);
   border-radius: 999px;
-  padding: 5px 12px;
-  font-size: 0.78rem;
+  padding: 6px 14px;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -492,55 +493,62 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   background: var(--dv-accent-tint);
   border: 1px solid var(--dv-accent);
   border-radius: var(--dv-radius);
-  padding: 8px 12px;
-  margin: 14px 0;
-  font-size: 0.82rem;
+  padding: 10px 14px;
+  margin: 16px 0;
+  font-size: 0.94rem;
   flex-wrap: wrap;
 }
 .new-bar strong { color: var(--dv-accent-dark); }
-.new-bar .dv-btn { font-size: 0.76rem; padding: 5px 10px; }
+.new-bar .dv-btn { font-size: 0.88rem; padding: 6px 12px; }
 
 /* Deal list: flowing rows, deliberately not a <table> -- the wireframe
    has no header row, and forcing this content into spreadsheet columns
    was the single biggest reason the first pass didn't look right. */
-.deal-list { background: var(--dv-card); border: 1px solid var(--dv-border); border-radius: var(--dv-radius); overflow: hidden; }
+/* overflow: visible, not hidden -- the not-yet panel and any other
+   row-anchored popover render inside a row here, and a hidden overflow
+   clipped them on any list too short for the popover's own height
+   (confirmed live 2026-09-01). Corner rounding is handled per-row
+   instead (first/last child) so it's not lost by leaving this visible. */
+.deal-list { background: var(--dv-card); border: 1px solid var(--dv-border); border-radius: var(--dv-radius); overflow: visible; }
+.deal-list > *:first-child { border-top-left-radius: var(--dv-radius); border-top-right-radius: var(--dv-radius); }
+.deal-list > *:last-child { border-bottom-left-radius: var(--dv-radius); border-bottom-right-radius: var(--dv-radius); }
 .deal-row {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 11px 16px;
+  gap: 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--dv-border);
   cursor: pointer;
 }
 .deal-row:last-child { border-bottom: none; }
 .deal-row:hover { background: rgba(0,0,0,0.015); }
-.deal-row .dv-thumb, .deal-row .dv-thumb-placeholder { width: 52px; height: 52px; flex-shrink: 0; border: 1px solid var(--dv-border); border-radius: 2px; }
+.deal-row .dv-thumb, .deal-row .dv-thumb-placeholder { width: 60px; height: 60px; flex-shrink: 0; border: 1px solid var(--dv-border); border-radius: 2px; }
 .deal-row .dv-thumb { object-fit: contain; background: #fafafa; }
 .deal-row .dv-thumb-placeholder { background: repeating-linear-gradient(45deg, #f4f4f4, #f4f4f4 4px, #ececec 4px, #ececec 8px); }
 .deal-row .dv-body { flex: 1; min-width: 0; }
-.deal-row .dv-name { font-family: var(--dv-condensed); font-weight: 600; font-size: 15px; }
+.deal-row .dv-name { font-family: var(--dv-condensed); font-weight: 600; font-size: 18px; }
 .deal-row .dv-name a { color: var(--dv-text); text-decoration: none; }
 .deal-row .dv-name a:hover { text-decoration: underline; color: var(--dv-accent-dark); }
-.deal-row .dv-store-badge { font-family: var(--dv-mono); font-size: 0.72rem; color: var(--dv-text-dim); margin-left: 6px; }
-.deal-row .dv-subline { font-size: 0.76rem; color: var(--dv-text-dim); margin-top: 2px; }
-.deal-row .dv-store-line { font-size: 0.78rem; margin-top: 2px; color: var(--dv-text-dim); }
+.deal-row .dv-store-badge { font-family: var(--dv-mono); font-size: 0.84rem; color: var(--dv-text-dim); margin-left: 6px; }
+.deal-row .dv-subline { font-size: 0.9rem; color: var(--dv-text-dim); margin-top: 3px; }
+.deal-row .dv-store-line { font-size: 0.92rem; margin-top: 3px; color: var(--dv-text-dim); }
 .deal-row .dv-store-line a, .deal-row .dv-expand-toggle { color: var(--dv-accent-dark); text-decoration: none; cursor: pointer; font-weight: 600; }
-.deal-row .dv-deferred-note { font-size: 0.76rem; color: var(--dv-text-dim); font-style: italic; margin-top: 2px; }
+.deal-row .dv-deferred-note { font-size: 0.9rem; color: var(--dv-text-dim); font-style: italic; margin-top: 3px; }
 
-.deal-row .dv-price { flex: 0 0 100px; text-align: right; }
-.deal-row .dv-price .now { font-family: var(--dv-condensed); font-weight: 600; font-size: 15px; }
-.deal-row .dv-price .was { font-size: 0.72rem; color: var(--dv-text-dim); text-decoration: line-through; }
+.deal-row .dv-price { flex: 0 0 110px; text-align: right; }
+.deal-row .dv-price .now { font-family: var(--dv-condensed); font-weight: 600; font-size: 18px; }
+.deal-row .dv-price .was { font-size: 0.84rem; color: var(--dv-text-dim); text-decoration: line-through; }
 
-.deal-row .dv-detected { flex: 0 0 100px; font-size: 0.78rem; }
+.deal-row .dv-detected { flex: 0 0 112px; font-size: 0.92rem; }
 .deal-row .dv-detected .rel { font-weight: 600; }
-.deal-row .dv-detected .abs { color: var(--dv-text-dim); font-size: 0.7rem; }
+.deal-row .dv-detected .abs { color: var(--dv-text-dim); font-size: 0.82rem; }
 
 .dv-tag {
   display: inline-block;
   font-family: var(--dv-body);
-  font-size: 0.72rem;
+  font-size: 0.84rem;
   font-weight: 700;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid var(--dv-accent);
   color: var(--dv-accent-dark);
@@ -548,9 +556,44 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 }
 .dv-tag.penny { border-color: #b23; color: #b23; background: #fdecea; }
 .dv-tag.muted { border-color: var(--dv-border); color: var(--dv-text-dim); background: transparent; }
-.deal-row .dv-discount { flex: 0 0 90px; }
+.deal-row .dv-discount { flex: 0 0 100px; }
 
-.deal-row .dv-actions { flex: 0 0 auto; position: relative; display: flex; }
+.deal-row .dv-actions { flex: 0 0 auto; position: relative; display: flex; align-items: center; gap: 8px; }
+
+.dv-refresh-btn {
+  font-family: var(--dv-body);
+  cursor: pointer;
+  border: 1px solid var(--dv-border);
+  border-radius: var(--dv-radius);
+  background: var(--dv-card);
+  color: var(--dv-text-dim);
+  width: 34px;
+  height: 34px;
+  font-size: 1.05rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.dv-refresh-btn:hover { border-color: var(--dv-accent); color: var(--dv-accent-dark); }
+.dv-refresh-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+.dv-refresh-btn.spinning { animation: dv-spin 1s linear infinite; }
+@keyframes dv-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.dv-refresh-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: 260px;
+  max-width: calc(100vw - 32px);
+  background: var(--dv-text);
+  color: white;
+  border-radius: var(--dv-radius);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+  padding: 10px 12px;
+  font-size: 0.86rem;
+  font-family: var(--dv-body);
+  text-align: left;
+}
 
 .dv-split { display: inline-flex; border: 1px solid var(--dv-accent); border-radius: var(--dv-radius); overflow: hidden; }
 .dv-split button {
@@ -558,8 +601,8 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   cursor: pointer;
   border: none;
   border-left: 1px solid var(--dv-accent);
-  padding: 6px 11px;
-  font-size: 0.78rem;
+  padding: 8px 13px;
+  font-size: 0.9rem;
   font-weight: 600;
   background: var(--dv-card);
   color: var(--dv-text);
@@ -568,30 +611,30 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .dv-split .dv-want-btn { background: var(--dv-accent); color: white; }
 .dv-split .dv-want-btn:hover { background: var(--dv-accent-dark); }
 .dv-split .dv-not-interested-btn:hover { background: var(--dv-accent-tint); }
-.dv-split .dv-not-yet-caret { padding: 6px 8px; }
+.dv-split .dv-not-yet-caret { padding: 8px 10px; }
 .dv-split .dv-not-yet-caret.open { background: var(--dv-accent); color: white; }
 
-.dv-plain-actions { display: inline-flex; gap: 6px; }
+.dv-plain-actions { display: inline-flex; gap: 7px; }
 .dv-plain-actions button {
   font-family: var(--dv-body);
   cursor: pointer;
   border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius);
-  padding: 6px 11px;
-  font-size: 0.78rem;
+  padding: 8px 13px;
+  font-size: 0.9rem;
   font-weight: 600;
   background: var(--dv-card);
   color: var(--dv-text);
 }
 .dv-plain-actions button:hover { border-color: var(--dv-accent); color: var(--dv-accent-dark); }
 
-.dv-expand-row { background: rgba(0,0,0,0.015); padding: 0 16px 8px 82px; }
-.dv-expand-item { display: flex; align-items: center; gap: 14px; padding: 5px 0; font-size: 0.78rem; border-top: 1px dashed var(--dv-border); }
+.dv-expand-row { background: rgba(0,0,0,0.015); padding: 0 18px 10px 94px; }
+.dv-expand-item { display: flex; align-items: center; gap: 16px; padding: 6px 0; font-size: 0.9rem; border-top: 1px dashed var(--dv-border); }
 .dv-expand-item:first-child { border-top: none; }
 .dv-expand-item a { color: var(--dv-accent-dark); text-decoration: none; }
 .dv-expand-item a:hover { text-decoration: underline; }
 .dv-expand-item .dv-expand-meta { flex: 1; color: var(--dv-text-dim); }
-.dv-expand-item .dv-expand-price { font-weight: 600; flex: 0 0 60px; text-align: right; }
+.dv-expand-item .dv-expand-price { font-weight: 600; flex: 0 0 68px; text-align: right; }
 .dv-expand-item button {
   font-family: var(--dv-body);
   cursor: pointer;
@@ -599,8 +642,8 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   border-radius: var(--dv-radius);
   background: var(--dv-card);
   color: var(--dv-text);
-  padding: 4px 10px;
-  font-size: 0.74rem;
+  padding: 5px 12px;
+  font-size: 0.86rem;
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -611,46 +654,55 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   top: calc(100% + 6px);
   right: 0;
   z-index: 20;
-  width: 300px;
+  width: 340px;
   max-width: calc(100vw - 32px);
   background: var(--dv-card);
   border: 1px solid var(--dv-border);
   border-radius: var(--dv-radius);
   box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-  padding: 14px;
-  font-size: 0.82rem;
+  padding: 16px;
+  font-size: 0.94rem;
   font-family: var(--dv-body);
   text-align: left;
 }
 .not-yet-panel .panel-label {
   font-family: var(--dv-mono);
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--dv-text-dim);
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
-.not-yet-panel label { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.not-yet-panel input[type="radio"] { accent-color: var(--dv-accent); }
+.not-yet-panel label { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; flex-wrap: wrap; }
+.not-yet-panel input[type="radio"] { accent-color: var(--dv-accent); flex-shrink: 0; width: 16px; height: 16px; }
 .not-yet-panel input[type="number"], .not-yet-panel select {
   font-family: var(--dv-body);
-  padding: 4px 6px;
+  font-size: 0.94rem;
+  padding: 5px 7px;
   border: 1px solid var(--dv-border);
   border-radius: 3px;
 }
-.not-yet-panel .modal-actions { display: flex; gap: 8px; margin-top: 10px; }
+.not-yet-panel .ny-slider-row { flex-wrap: nowrap; }
+.not-yet-panel input[type="range"] {
+  accent-color: var(--dv-accent);
+  flex: 1;
+  min-width: 80px;
+  height: 20px;
+}
+.not-yet-panel #ny-discount-value { flex-shrink: 0; font-weight: 700; min-width: 38px; font-size: 1rem; }
+.not-yet-panel .modal-actions { display: flex; gap: 9px; margin-top: 12px; }
 .not-yet-panel .modal-actions button {
   font-family: var(--dv-body);
   cursor: pointer;
   border-radius: var(--dv-radius);
-  padding: 6px 12px;
-  font-size: 0.78rem;
+  padding: 8px 14px;
+  font-size: 0.9rem;
   font-weight: 600;
   border: 1px solid var(--dv-accent);
 }
 .not-yet-panel #ny-set { background: var(--dv-accent); color: white; }
 .not-yet-panel #ny-cancel { background: var(--dv-card); color: var(--dv-text); border-color: var(--dv-border); }
-.not-yet-panel .footnote { font-size: 0.7rem; color: var(--dv-text-dim); margin-top: 8px; }
+.not-yet-panel .footnote { font-size: 0.82rem; color: var(--dv-text-dim); margin-top: 10px; }
 
 .build-footer {
   text-align: center;

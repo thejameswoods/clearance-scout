@@ -396,3 +396,81 @@ def repair_missing_enrichment(
         "aisle_bay_filled": aisle_bay_filled,
         "errors": errors,
     }
+
+
+def refresh_single_product(conn, browser_ctx, adapter: RetailerAdapter, product_id: int) -> dict:
+    """On-demand "check this one item right now, everywhere" -- confirmed
+    live 2026-09-01: the normal per-department scan cadence means a
+    product a user is actively looking at can sit unchecked (or its
+    inventory data stale/missing) for a while. Re-checks every store
+    currently on record for the product's retailer, one at a time,
+    reusing check_price() (the existing single-item path, which already
+    does its own enrichment on a hit) rather than check_prices()'s
+    wave-batching -- this is one product at N stores, not N products at
+    one store, so there's no batching win to have.
+
+    Called from scanner/main.py's refresh queue, never directly from a
+    web request -- the queue is what lets someone "mash the button"
+    across many products without racing requests against the same
+    browser_ctx or hammering the retailer concurrently.
+    """
+    row = conn.execute(
+        "SELECT retailer_id, retailer_product_id, name, department_id FROM product WHERE id = %s",
+        (product_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"refresh_single_product: no product with id {product_id}")
+
+    stores = conn.execute(
+        "SELECT id, retailer_store_id, zip_code, name, address FROM store WHERE retailer_id = %s",
+        (row["retailer_id"],),
+    ).fetchall()
+
+    # department is required by ProductRef but unused by check_price
+    # beyond passing it back on the ProductRef it's given -- same
+    # placeholder pattern as repair_missing_enrichment above.
+    placeholder_department = Department(retailer_department_id="", name="")
+    product_ref = ProductRef(
+        retailer_product_id=row["retailer_product_id"], name=row["name"], department=placeholder_department,
+    )
+
+    checked = 0
+    hits = 0
+    errors = 0
+
+    for store_row in stores:
+        store = StoreInfo(
+            retailer_store_id=store_row["retailer_store_id"], zip_code=store_row["zip_code"],
+            name=store_row["name"], address=store_row["address"],
+        )
+        try:
+            adapter.select_store(browser_ctx, store)
+            observation = adapter.check_price(browser_ctx, product_ref, store)
+        except Exception:
+            logger.exception(
+                "Refresh: check_price failed for product %s at store %s",
+                product_id, store_row["retailer_store_id"],
+            )
+            errors += 1
+            continue
+
+        checked += 1
+        db.upsert_product(
+            conn, row["retailer_id"], product_ref.retailer_product_id, product_ref.name,
+            department_id=row["department_id"], upc=None,
+            image_url=observation.image_url, canonical_url=observation.canonical_url,
+        )
+        db.upsert_store_product_location(conn, product_id, store_row["id"], observation.aisle, observation.bay)
+        observation_id = db.insert_price_observation(
+            conn, product_id, store_row["id"], None, observation.observed_at,
+            observation.price_cents, observation.list_price_cents,
+            observation.is_clearance, observation.is_penny,
+            observation.fulfillment_state, observation.stock_quantity, observation.raw_signal,
+        )
+        db.upsert_deal_from_observation(
+            conn, product_id, store_row["id"], observation_id, observation.is_clearance, observation.is_penny,
+        )
+        if observation.is_clearance or observation.is_penny:
+            hits += 1
+
+    return {"stores_total": len(stores), "checked": checked, "hits": hits, "errors": errors}

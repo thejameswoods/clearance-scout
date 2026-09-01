@@ -109,7 +109,7 @@ def list_deals(
             p.image_url, p.canonical_url, p.department_id, dept.name AS department_name,
             s.id AS store_id, s.name AS store_name, s.address AS store_address,
             s.retailer_store_id,
-            r.slug AS retailer_slug, r.display_name AS retailer_name,
+            r.slug AS retailer_slug, r.display_name AS retailer_name, r.min_discount_pct,
             po.price_cents, po.list_price_cents, po.is_clearance, po.is_penny,
             po.fulfillment_state, po.stock_quantity, po.observed_at,
             CASE WHEN po.list_price_cents > 0
@@ -133,7 +133,19 @@ def list_deals(
     ).fetchall()
 
     if min_discount_pct is not None:
+        # An explicit filter on this request is the user's own call --
+        # it replaces the retailer default rather than stacking with it
+        # (a lower explicit value can deliberately see below the floor).
         rows = [r for r in rows if (r["discount_pct"] or 0) >= min_discount_pct]
+    else:
+        # No explicit filter -- each retailer's own configured floor
+        # (retailer.min_discount_pct) applies by default. Penny items are
+        # exempt: they're an extreme deal on their own terms, and some
+        # have no discount_pct at all (no list_price on record).
+        rows = [
+            r for r in rows
+            if r["is_penny"] or not r["min_discount_pct"] or (r["discount_pct"] or 0) >= r["min_discount_pct"]
+        ]
     return rows
 
 
@@ -148,20 +160,37 @@ def status_bar_counts(
     deeper cut / All, within the current scope. "All" is new+active+
     deferred (everything untriaged-or-held) -- not stale/bought/dismissed,
     same posture as list_deals' default filter."""
+    # count(DISTINCT d.product_id), not count(*) -- a scope spanning more
+    # than one store (the common case: "all stores" is the default) would
+    # otherwise count one product with deals at 2 stores as 2 items
+    # (confirmed live 2026-09-01).
     scope_clauses, scope_params = _scope_clauses(retailer_slug, store_id, department_id, department_prefix)
     scope_sql = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
+    # Same retailer-floor default as list_deals: a retailer with
+    # min_discount_pct set should show a "count" that matches what the
+    # feed underneath it actually displays, not a bigger number that
+    # includes deals the floor is about to hide.
+    floor_clause = """
+        AND (
+            po.is_penny
+            OR r.min_discount_pct IS NULL
+            OR (po.list_price_cents > 0
+                AND (100.0 * (po.list_price_cents - po.price_cents) / po.list_price_cents) >= r.min_discount_pct)
+        )
+    """
     row = conn.execute(
         f"""
         SELECT
-            count(*) FILTER (WHERE d.status IN ('new', 'active')) AS active,
-            count(*) FILTER (WHERE d.status = 'deferred') AS waiting,
-            count(*) FILTER (WHERE d.status IN ('new', 'active', 'deferred')) AS all_open
+            count(DISTINCT d.product_id) FILTER (WHERE d.status IN ('new', 'active')) AS active,
+            count(DISTINCT d.product_id) FILTER (WHERE d.status = 'deferred') AS waiting,
+            count(DISTINCT d.product_id) FILTER (WHERE d.status IN ('new', 'active', 'deferred')) AS all_open
         FROM deal d
+        JOIN price_observation po ON po.id = d.latest_observation_id
         JOIN product p ON p.id = d.product_id
         JOIN store s ON s.id = d.store_id
         JOIN retailer r ON r.id = p.retailer_id
         LEFT JOIN department dept ON dept.id = p.department_id
-        WHERE p.dismissed_at IS NULL {scope_sql}
+        WHERE p.dismissed_at IS NULL {scope_sql} {floor_clause}
         """,
         scope_params,
     ).fetchone()
@@ -170,9 +199,12 @@ def status_bar_counts(
 
 def retailer_store_tree(conn) -> list[dict[str, Any]]:
     """Sidebar section 1: retailer -> store, each with an open (new/active,
-    not-dismissed) deal count. One query; grouped in Python since the
-    output shape (retailer with a nested store list) doesn't map cleanly
-    to a flat result set."""
+    not-dismissed) deal count. Per-store counts are safe as a plain
+    count(d.id) -- a product has at most one deal row per store (UNIQUE
+    product_id, store_id) -- but the retailer-level total is NOT simply
+    the sum of its stores' counts (that double-counts a product on sale
+    at more than one store, confirmed live 2026-09-01); it's a second,
+    separate count(DISTINCT product_id) query, not a Python sum."""
     rows = conn.execute(
         """
         SELECT r.id AS retailer_id, r.slug AS retailer_slug, r.display_name AS retailer_name,
@@ -187,13 +219,25 @@ def retailer_store_tree(conn) -> list[dict[str, Any]]:
         """
     ).fetchall()
 
+    totals = {
+        row["retailer_id"]: row["total"]
+        for row in conn.execute(
+            """
+            SELECT r.id AS retailer_id, count(DISTINCT d.product_id) AS total
+            FROM retailer r
+            JOIN product p ON p.retailer_id = r.id AND p.dismissed_at IS NULL
+            JOIN deal d ON d.product_id = p.id AND d.status IN ('new', 'active')
+            GROUP BY r.id
+            """
+        ).fetchall()
+    }
+
     retailers: dict[int, dict[str, Any]] = {}
     for row in rows:
         retailer = retailers.setdefault(row["retailer_id"], {
             "retailer_id": row["retailer_id"], "slug": row["retailer_slug"],
-            "display_name": row["retailer_name"], "total": 0, "stores": [],
+            "display_name": row["retailer_name"], "total": totals.get(row["retailer_id"], 0), "stores": [],
         })
-        retailer["total"] += row["open_count"]
         retailer["stores"].append({
             "store_id": row["store_id"], "name": row["store_name"],
             "retailer_store_id": row["retailer_store_id"], "open_count": row["open_count"],
@@ -225,7 +269,7 @@ def department_tree_with_counts(conn, retailer_slug: str, store_id: int | None =
         row["name"]: row["open_count"]
         for row in conn.execute(
             f"""
-            SELECT dept.name, count(d.id) AS open_count
+            SELECT dept.name, count(DISTINCT p.id) FILTER (WHERE d.id IS NOT NULL) AS open_count
             FROM department dept
             JOIN retailer r ON r.id = dept.retailer_id
             LEFT JOIN product p ON p.department_id = dept.id AND p.dismissed_at IS NULL
@@ -331,7 +375,7 @@ def recent_backoff(conn) -> list[dict[str, Any]]:
 
 def list_retailers(conn) -> list[dict[str, Any]]:
     return conn.execute(
-        "SELECT id, slug, display_name FROM retailer ORDER BY display_name"
+        "SELECT id, slug, display_name, min_discount_pct FROM retailer ORDER BY display_name"
     ).fetchall()
 
 

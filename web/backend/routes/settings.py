@@ -39,6 +39,17 @@ def retailers():
         return queries.list_retailers(conn)
 
 
+class RetailerMinDiscountUpdate(BaseModel):
+    min_discount_pct: float | None = None  # None clears the floor
+
+
+@router.put("/retailers/{retailer_id}/min-discount")
+def update_retailer_min_discount(retailer_id: int, update: RetailerMinDiscountUpdate):
+    with db.get_connection() as conn:
+        db.set_retailer_min_discount_pct(conn, retailer_id, update.min_discount_pct)
+    return {"ok": True}
+
+
 @router.get("/stores")
 def stores():
     with db.get_connection() as conn:
