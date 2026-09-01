@@ -704,6 +704,98 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .not-yet-panel #ny-cancel { background: var(--dv-card); color: var(--dv-text); border-color: var(--dv-border); }
 .not-yet-panel .footnote { font-size: 0.82rem; color: var(--dv-text-dim); margin-top: 10px; }
 
+/* Item detail modal (wireframe 4a) -- a full-size overlay replacing the
+   old cramped 500px table modal ("too small to read", design handoff).
+   Only .modal-content gets the modifier (added by openProductDetail,
+   removed by openDeal) so History's per-deal modal keeps its old size.
+   Re-declares the #tab-deals steel-blue tokens since #deal-modal lives
+   outside #tab-deals in the DOM and wouldn't otherwise inherit them. */
+.modal-content.pd-detail {
+  --dv-accent: #5980a6;
+  --dv-accent-dark: #45657f;
+  --dv-accent-tint: #eaf0f5;
+  --dv-card: #ffffff;
+  --dv-text: #1d1f20;
+  --dv-text-dim: #6b6f72;
+  --dv-border: #dcdcdc;
+  --dv-radius: 4px;
+  --dv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --dv-condensed: "Barlow Condensed", sans-serif;
+  --dv-body: "Barlow", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--dv-body);
+  color: var(--dv-text);
+  max-width: 860px;
+  width: 94vw;
+  max-height: 88vh;
+  padding: 24px 28px;
+}
+.pd-detail .dv-text-dim { color: var(--dv-text-dim); }
+.pd-detail .was { font-size: 0.84rem; color: var(--dv-text-dim); text-decoration: line-through; }
+
+.pd-topbar { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; margin-bottom: 16px; padding-right: 24px; }
+.pd-topbar #pd-back { color: var(--dv-accent-dark); text-decoration: none; font-weight: 600; }
+.pd-topbar #pd-back:hover { text-decoration: underline; }
+.pd-breadcrumb { color: var(--dv-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-breadcrumb strong { color: var(--dv-text); font-weight: 700; }
+
+.pd-header { display: flex; gap: 20px; align-items: flex-start; }
+.pd-photo, .pd-photo-placeholder { width: 160px; height: 160px; flex-shrink: 0; border: 1px solid var(--dv-border); border-radius: var(--dv-radius); object-fit: contain; background: #fafafa; }
+.pd-photo-placeholder { background: repeating-linear-gradient(45deg, #f4f4f4, #f4f4f4 4px, #ececec 4px, #ececec 8px); }
+.pd-header-body { flex: 1; min-width: 0; }
+
+.pd-tag {
+  display: inline-block;
+  font-family: var(--dv-body);
+  font-size: 0.84rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--dv-accent);
+  color: var(--dv-accent-dark);
+  background: transparent;
+  margin-right: 6px;
+}
+.pd-tag.solid { color: white; background: var(--dv-accent); }
+.pd-tag.penny { border-color: #b23; color: #b23; }
+.pd-tag.muted { border-color: var(--dv-border); color: var(--dv-text-dim); }
+.pd-status-tags { margin-bottom: 8px; }
+
+.pd-name { font-family: var(--dv-condensed); font-weight: 700; font-size: 26px; margin: 0 0 4px; line-height: 1.15; }
+.pd-meta { font-size: 0.9rem; color: var(--dv-text-dim); }
+.pd-price-line { display: flex; align-items: baseline; gap: 10px; margin: 10px 0; }
+.pd-price-now { font-family: var(--dv-condensed); font-weight: 700; font-size: 22px; }
+
+.pd-actions.dv-actions { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pd-actions #pd-share-btn { background: var(--dv-card); color: var(--dv-accent-dark); border: 1px solid var(--dv-border); border-radius: var(--dv-radius); padding: 8px 14px; font-family: var(--dv-body); font-weight: 600; }
+.pd-actions #pd-share-btn:hover { border-color: var(--dv-accent); }
+
+.pd-history { border-top: 1px solid var(--dv-border); margin-top: 20px; padding-top: 16px; }
+.pd-section-label { font-family: var(--dv-mono); font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dv-text-dim); margin: 20px 0 10px; }
+.pd-history-content { display: flex; align-items: center; gap: 20px; color: var(--dv-text-dim); font-size: 0.9rem; }
+.pd-sparkline { width: 220px; height: 44px; flex-shrink: 0; }
+.pd-narrative { color: var(--dv-text); }
+
+.pd-stores { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.pd-store-card { border: 1px solid var(--dv-border); border-radius: var(--dv-radius); padding: 12px 14px; }
+.pd-store-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.pd-store-card-head a { color: var(--dv-text); font-family: var(--dv-condensed); font-weight: 600; font-size: 1.05rem; text-decoration: none; }
+.pd-store-card-head a:hover { color: var(--dv-accent-dark); text-decoration: underline; }
+.pd-store-card .store-address-link { font-size: 0.86rem; color: var(--dv-accent-dark); }
+.pd-store-card-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.88rem; margin-top: 6px; }
+.pd-store-card-price { font-family: var(--dv-condensed); font-weight: 700; font-size: 17px; }
+.pd-store-card .add-store-btn {
+  margin-top: 10px;
+  width: 100%;
+  font-family: var(--dv-body);
+  font-weight: 600;
+  border: 1px solid var(--dv-border);
+  border-radius: var(--dv-radius);
+  background: var(--dv-card);
+  color: var(--dv-text);
+  padding: 7px 10px;
+}
+.pd-store-card .add-store-btn:hover { border-color: var(--dv-accent); color: var(--dv-accent-dark); }
+
 .build-footer {
   text-align: center;
   padding: 10px;

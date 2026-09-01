@@ -314,12 +314,19 @@ def deal_detail(conn, deal_id: int) -> dict[str, Any] | None:
     if not deal:
         return None
 
+    # store_id/store_name included so a caller can build a coherent
+    # single-store price trajectory (the item-detail modal's History
+    # narrative) -- these rows span every store carrying the product, and
+    # naively narrating them in observed_at order interleaves unrelated
+    # stores' prices into one nonsensical up-and-down story.
     history = conn.execute(
         """
-        SELECT observed_at, price_cents, list_price_cents, is_clearance, is_penny
-        FROM price_observation
-        WHERE product_id = %s
-        ORDER BY observed_at DESC
+        SELECT po.observed_at, po.price_cents, po.list_price_cents, po.is_clearance, po.is_penny,
+               po.store_id, s.name AS store_name
+        FROM price_observation po
+        JOIN store s ON s.id = po.store_id
+        WHERE po.product_id = %s
+        ORDER BY po.observed_at DESC
         LIMIT 200
         """,
         (deal["product_id"],),

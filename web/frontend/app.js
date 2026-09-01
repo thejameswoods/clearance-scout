@@ -466,82 +466,210 @@ function shareProductLink(productId) {
   window.prompt("Link to this deal (copied to clipboard if supported):", url);
 }
 
+// This retailer's department tree (window._departmentTree, from loadTree())
+// stores each node's full flattened name plus its immediate parent's full
+// name (see build_department_hierarchy) -- walking `parent` back to a root
+// reconstructs the breadcrumb's per-level labels for the item-detail modal.
+// Falls back to the flat department name if the tree hasn't loaded (e.g. a
+// product opened via ?product= before the sidebar has fetched).
+function departmentBreadcrumbLabels(departmentName) {
+  if (!departmentName) return [];
+  const tree = window._departmentTree || [];
+  const byName = new Map(tree.map((n) => [n.name, n]));
+  let node = byName.get(departmentName);
+  if (!node) return [departmentName];
+  const labels = [];
+  while (node) {
+    labels.unshift(node.label);
+    node = node.parent ? byName.get(node.parent) : null;
+  }
+  return labels;
+}
+
+function sparklineSvg(history) {
+  const asc = history.slice().reverse();
+  if (asc.length < 2) return "";
+  const prices = asc.map((h) => h.price_cents);
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const w = 220, h = 44;
+  const points = asc
+    .map((p, i) => {
+      const x = (i / (asc.length - 1)) * w;
+      const y = hi === lo ? h / 2 : h - ((p.price_cents - lo) / (hi - lo)) * h;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return `<svg class="pd-sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${points}" fill="none" stroke="var(--dv-accent)" stroke-width="2"/></svg>`;
+}
+
+// Product-wide price_history interleaves every store's observations in one
+// observed_at-ordered list -- narrating that directly produces nonsense for
+// a multi-store product ("dropped to $3.47 ... deepened to $5.12") since
+// it's really two unrelated stores' prices, not one trajectory. Anchoring
+// the story to a single store (the modal's cheapest row) keeps it coherent
+// and matches the wireframe's single "... 2h ago at Chapel Hill #3612"
+// narrative, which only ever tells one store's story.
+function historyForStore(history, storeId) {
+  const filtered = history.filter((h) => h.store_id === storeId);
+  return filtered.length ? filtered : history;
+}
+
+// One sentence per distinct price level, oldest first ("Full price $X since
+// <date>", then "dropped"/"deepened to $Y (Z%) <date>"), matching the
+// wireframe's history narrative, ending with the store it happened at.
+function buildHistoryNarrative(storeHistory) {
+  if (!storeHistory.length) return "No price history recorded yet.";
+  const asc = storeHistory.slice().reverse();
+  const storeName = asc[asc.length - 1].store_name;
+  const segments = [];
+  let prevPrice = null;
+  asc.forEach((h, i) => {
+    if (prevPrice === h.price_cents) return;
+    const dateStr = new Date(h.observed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (i === 0) {
+      segments.push(`Full price ${money(h.price_cents)} since ${dateStr}`);
+    } else {
+      const pct = h.list_price_cents > 0
+        ? Math.round((100 * (h.list_price_cents - h.price_cents)) / h.list_price_cents)
+        : null;
+      const verb = segments.length === 1 ? "dropped" : "deepened";
+      segments.push(`${verb} to ${money(h.price_cents)}${pct != null ? ` (${pct}%)` : ""} ${dateStr}`);
+    }
+    prevPrice = h.price_cents;
+  });
+  if (segments.length > 0 && storeName) {
+    const lastObserved = asc[asc.length - 1].observed_at;
+    segments[segments.length - 1] += ` ${relTime(lastObserved)} at ${storeName}`;
+  }
+  return segments.join(" · ") + ".";
+}
+
+function productDetailStatusTag(rows) {
+  if (rows.some((r) => r.is_penny)) return `<span class="pd-tag solid">Penny item</span>`;
+  if (rows.some((r) => r.is_clearance)) return `<span class="pd-tag solid">Active clearance</span>`;
+  return `<span class="pd-tag">Tracked</span>`;
+}
+
+function productDetailActionsHtml(productId, cheapest, isDeferred, first) {
+  return `
+    <button class="dv-refresh-btn" data-product="${productId}" type="button" title="Check this item across every store, right now">⟳</button>
+    ${isDeferred ? `
+      <div class="dv-plain-actions">
+        <button class="undefer-btn" data-deal="${cheapest.deal_id}">Change</button>
+        <button class="not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Never</button>
+      </div>
+    ` : `
+      <div class="dv-split">
+        <button class="dv-want-btn" data-deal="${cheapest.deal_id}">Want</button>
+        <button class="dv-not-interested-btn not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Not interested</button>
+        <button class="dv-not-yet-caret not-yet-caret" data-deal="${cheapest.deal_id}" data-product-name="${escapeHtml(first.product_name)}" type="button">▾</button>
+      </div>
+    `}
+    <button class="secondary" id="pd-share-btn" type="button">Share link</button>
+  `;
+}
+
+function productDetailStoreCardHtml(r, cheapestDealId) {
+  const stock = stockText(r);
+  const stockClass = r.stock_quantity != null && r.stock_quantity <= 5 ? "low" : "ok";
+  return `
+    <div class="pd-store-card">
+      <div class="pd-store-card-head">
+        <a href="${productLink(r.canonical_url, r.retailer_store_id)}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
+        ${r.deal_id === cheapestDealId ? `<span class="pd-tag muted">cheapest</span>` : ""}
+      </div>
+      ${r.store_address ? `<a class="store-address-link" target="_blank" rel="noopener" href="${mapsLink(r.store_address)}">${escapeHtml(r.store_address)}</a>` : ""}
+      <div class="pd-store-card-row">
+        ${r.aisle ? `<span>Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}</span>` : `<span class="dv-text-dim">Aisle unknown</span>`}
+        ${stock ? `<span><span class="stock-dot ${stockClass}"></span>${escapeHtml(stock)}</span>` : ""}
+        <span class="dv-text-dim">checked ${relTime(r.observed_at)}</span>
+      </div>
+      <div class="pd-store-card-row">
+        <span class="pd-store-card-price">${money(r.price_cents)}</span>
+        ${r.list_price_cents ? `<span class="was">${money(r.list_price_cents)}</span>` : ""}
+        ${r.discount_pct != null ? `<span class="pd-tag">${r.discount_pct}% off</span>` : r.is_penny ? `<span class="pd-tag penny">Penny</span>` : ""}
+      </div>
+      <button class="add-store-btn" data-deal="${r.deal_id}">Add to this store's list</button>
+    </div>
+  `;
+}
+
 function openProductDetail(productId) {
   const rows = window._dealGroups?.get(productId);
   if (!rows) return;
   const first = rows[0];
+  const cheapest = cheapestRow(rows);
+  const isDeferred = rows.every((r) => r.status === "deferred");
+  const storeRows = rows.slice().sort((a, b) => a.price_cents - b.price_cents);
+
+  const breadcrumb = [first.retailer_name, ...departmentBreadcrumbLabels(first.department_name)];
+  const breadcrumbHtml = breadcrumb
+    .map((seg, i) => (i === breadcrumb.length - 1 ? `<strong>${escapeHtml(seg)}</strong>` : escapeHtml(seg)))
+    .join(" / ");
+
+  const modalContent = document.querySelector("#deal-modal .modal-content");
+  modalContent.classList.add("pd-detail");
   const body = $("#modal-body");
 
-  const detailRows = rows
-    .map((r) => {
-      const stockText = r.stock_quantity != null ? `${r.stock_quantity} left` : (r.fulfillment_state || "");
-      const stockClass = r.stock_quantity != null && r.stock_quantity <= 5 ? "low" : "ok";
-      return `
-        <tr>
-          <td>${r.image_url ? `<img class="thumb" src="${r.image_url}" alt="">` : ""}</td>
-          <td>
-            <div class="product-name">${escapeHtml(r.product_name)}</div>
-            ${r.department_name ? `<div class="product-dept">${escapeHtml(r.department_name)}</div>` : ""}
-            ${r.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${productLink(r.canonical_url, r.retailer_store_id)}">View item &rarr;</a>` : ""}
-          </td>
-          <td>${money(r.price_cents)}${r.list_price_cents ? `<div class="product-dept">was ${money(r.list_price_cents)}</div>` : ""}</td>
-          <td>${discountBadge([r])}</td>
-          <td>${r.store_address ? `<a class="store-address-link" target="_blank" rel="noopener" href="${mapsLink(r.store_address)}">${escapeHtml(r.store_address)}</a>` : ""}</td>
-          <td>${escapeHtml(r.retailer_store_id || "")}${r.aisle ? `<div class="product-dept">Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}</div>` : ""}</td>
-          <td>${stockText ? `<span class="stock-dot ${stockClass}"></span>${escapeHtml(stockText)}` : ""}</td>
-          <td>${relTime(r.created_at)}</td>
-          <td class="action-col">
-            <button class="row-save-btn" data-deal="${r.deal_id}">Save</button>
-            <button class="secondary row-bought-btn" data-deal="${r.deal_id}">Bought</button>
-            <button class="secondary row-dismiss-btn" data-deal="${r.deal_id}">Dismiss</button>
-          </td>
-        </tr>
-      `;
-    })
-    .join("");
-
   body.innerHTML = `
-    <h2>${escapeHtml(first.product_name)}</h2>
-    <p class="meta">SKU ${escapeHtml(first.retailer_product_id)}</p>
-    <div class="table-wrap">
-      <table class="detail-table">
-        <thead>
-          <tr>
-            <th>Image</th><th>Product</th><th>Price</th><th>Discount</th>
-            <th>Address</th><th>Store</th><th>Stock</th><th>Added</th><th>Action</th>
-          </tr>
-        </thead>
-        <tbody>${detailRows}</tbody>
-      </table>
+    <div class="pd-topbar">
+      <a href="#" id="pd-back">‹ Back to Deals</a>
+      <span class="dv-text-dim">·</span>
+      <span class="pd-breadcrumb">${breadcrumbHtml}</span>
     </div>
-    <div class="modal-actions">
-      <button class="secondary" id="modal-share-btn">Share Link</button>
+    <div class="pd-header">
+      ${first.image_url ? `<img class="pd-photo" src="${first.image_url}" alt="">` : `<div class="pd-photo pd-photo-placeholder"></div>`}
+      <div class="pd-header-body">
+        <div class="pd-status-tags">
+          ${productDetailStatusTag(rows)}
+          ${isDeferred ? `<span class="pd-tag muted">${escapeHtml(deferredNoteText(cheapest))}</span>` : ""}
+        </div>
+        <h2 class="pd-name">${escapeHtml(first.product_name)}</h2>
+        <div class="pd-meta">SKU ${escapeHtml(first.retailer_product_id)}</div>
+        <div class="pd-price-line">
+          <span class="pd-price-now">${priceRangeText(rows)}</span>
+          ${first.list_price_cents ? `<span class="was">${money(first.list_price_cents)}</span>` : ""}
+          ${dvDiscountTag(rows)}
+        </div>
+        <div class="dv-actions pd-actions">${productDetailActionsHtml(productId, cheapest, isDeferred, first)}</div>
+      </div>
+    </div>
+    <div class="pd-history">
+      <div class="pd-section-label">History</div>
+      <div id="pd-history-content" class="pd-history-content">Loading price history…</div>
+    </div>
+    <div class="pd-section-label">Available at ${rows.length} of ${rows.length} ${escapeHtml(first.retailer_name || "")} store${rows.length === 1 ? "" : "s"} near you</div>
+    <div class="pd-stores">
+      ${storeRows.map((r) => productDetailStoreCardHtml(r, cheapest.deal_id)).join("")}
     </div>
   `;
 
-  $("#modal-share-btn").addEventListener("click", () => shareProductLink(productId));
-  body.querySelectorAll(".row-save-btn").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/api/deals/${btn.dataset.deal}/save`, { method: "POST" });
-      closeModal();
-      refreshActiveTab();
-    })
+  $("#pd-back").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    closeModal();
+  });
+  $("#pd-share-btn").addEventListener("click", () => shareProductLink(productId));
+  wireDealRowActions(body);
+  body.querySelectorAll(".dv-want-btn, .add-store-btn, .not-interested-btn, .undefer-btn").forEach((btn) =>
+    btn.addEventListener("click", () => closeModal())
   );
-  body.querySelectorAll(".row-bought-btn").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/api/deals/${btn.dataset.deal}/bought`, { method: "POST" });
-      closeModal();
-      refreshActiveTab();
-    })
-  );
-  body.querySelectorAll(".row-dismiss-btn").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/api/deals/${btn.dataset.deal}/dismiss`, { method: "POST" });
-      closeModal();
-      refreshActiveTab();
-    })
-  );
+
   $("#deal-modal").classList.remove("hidden");
+
+  api(`/api/deals/${cheapest.deal_id}`)
+    .then((detail) => {
+      const el = $("#pd-history-content");
+      if (!el) return;
+      const storeHistory = historyForStore(detail.price_history, cheapest.store_id);
+      el.innerHTML = `
+        ${sparklineSvg(storeHistory)}
+        <div class="pd-narrative">${escapeHtml(buildHistoryNarrative(storeHistory))}</div>
+      `;
+    })
+    .catch(() => {
+      const el = $("#pd-history-content");
+      if (el) el.textContent = "Price history unavailable.";
+    });
 }
 
 async function loadShoppingList() {
@@ -618,6 +746,7 @@ async function loadHistory() {
 
 async function openDeal(dealId) {
   const d = await api(`/api/deals/${dealId}`);
+  document.querySelector("#deal-modal .modal-content")?.classList.remove("pd-detail");
   const body = $("#modal-body");
   const historyRows = d.price_history
     .map(
