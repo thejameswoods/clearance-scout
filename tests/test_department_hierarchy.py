@@ -4,6 +4,8 @@ web/backend/queries.py:build_department_hierarchy for why this exists)."""
 
 from __future__ import annotations
 
+import time
+
 from web.backend.queries import build_department_hierarchy
 
 
@@ -64,3 +66,25 @@ def test_unrelated_names_are_all_roots_at_depth_zero():
 def test_duplicate_names_deduplicated():
     result = build_department_hierarchy(["Electrical", "Electrical"])
     assert len(result) == 1
+
+
+def test_scales_to_real_department_counts_without_quadratic_blowup():
+    """Confirmed live 2026-09-01: the original nested-loop implementation
+    ("for each name, scan every other name for the longest prefix match")
+    took 4.3s of a 4.5s /api/deals/tree request at ~5,200 real department
+    names -- every sidebar click re-fetches this. A tree this shape (200
+    top-level categories x ~25 sub-departments each, matching the real
+    department names' structure) should resolve in well under a second on
+    the current sort+stack implementation; a regression back to O(n^2)
+    here would blow well past that."""
+    names = [f"Category {c}" for c in range(200)]
+    for c in range(200):
+        names += [f"Category {c} Sub {s}" for s in range(25)]
+    assert len(names) == 5200
+
+    start = time.monotonic()
+    result = build_department_hierarchy(names)
+    elapsed = time.monotonic() - start
+
+    assert len(result) == 5200
+    assert elapsed < 1.0, f"took {elapsed:.2f}s -- expected well under 1s at this scale"
