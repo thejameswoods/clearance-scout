@@ -129,11 +129,58 @@ CREATE TABLE deal (
     -- common/db.py's reactivate_satisfied_defers) -- satisfying it
     -- anywhere flips this row back to 'new'.
     defer_rule             JSONB,
+    -- deal_kind / check_interval / last_checked_at back the "Watching"
+    -- status tag (design-v2 screen 2a): deal_kind='upcoming_clearance' is
+    -- a full-price item flagged for closer watching, distinct from
+    -- 'active_clearance' (already discounted) and 'penny'. The scanner
+    -- does not create or flag upcoming_clearance deals yet -- that's a
+    -- separate, future scanner change (deal rows today only come from a
+    -- confirmed clearance/penny hit, see upsert_deal_from_observation) --
+    -- these columns exist so the read API and the "Close eye" endpoint are
+    -- correct now, at 0 watched deals, instead of needing a second schema
+    -- change once the scanner side lands. check_interval is stored as an
+    -- INTERVAL for cheap SQL-side halving (see common/db.py's
+    -- shorten_check_interval); the API surfaces it as whole seconds.
+    deal_kind               TEXT NOT NULL DEFAULT 'active_clearance'
+                             CHECK (deal_kind IN ('active_clearance', 'upcoming_clearance', 'penny')),
+    check_interval          INTERVAL NOT NULL DEFAULT '4 hours',
+    last_checked_at         TIMESTAMPTZ,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (product_id, store_id)
 );
 CREATE INDEX idx_deal_status ON deal (status);
+
+-- Per-store shopping list item state -- one row per deal that's ever been
+-- added to a list. Keyed by deal_id, not a fresh (product_id, store_id)
+-- pair: `deal` is already UNIQUE(product_id, store_id) (see above), so a
+-- list item maps 1:1 onto a deal row and the store comes for free via
+-- deal.store_id -- duplicating (product_id, store_id) here would just be a
+-- redundant copy of what `deal` already guarantees, with its own
+-- uniqueness constraint to keep in sync.
+--
+-- deal.status='saved' still marks "this deal is on some list" (unchanged,
+-- for backward compat with the existing POST /api/deals/{id}/save and
+-- History); this table adds the finer-grained per-item state the shopping-
+-- list screens (3a/3b) need on top of that. List membership for the lists
+-- read endpoint is this table's state != 'no_longer_needed', not
+-- deal.status -- see web/backend/queries.py's store_lists.
+CREATE TABLE list_item (
+    id                 SERIAL PRIMARY KEY,
+    deal_id            INTEGER NOT NULL UNIQUE REFERENCES deal(id) ON DELETE CASCADE,
+    state              TEXT NOT NULL DEFAULT 'open'
+                        CHECK (state IN ('open', 'purchased', 'cant_find', 'no_longer_needed')),
+    quantity           INTEGER,
+    purchased_at       TIMESTAMPTZ,
+    -- Free-text, not an enum -- HANDOFF_DEALS_PAGE.md's "Open questions"
+    -- leaves the can't-find reason values (gone / mispriced / wrong aisle /
+    -- other) undecided by the user. Free-text unblocks the walking view's
+    -- "reason" sheet now; narrow to a CHECK'd enum later once that's settled.
+    cant_find_reason   TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_list_item_state ON list_item (state);
 
 -- Idempotency + audit for bot alerts — a restart must never re-alert the
 -- same deal.
@@ -194,3 +241,48 @@ CREATE TABLE watched_department (
     department_id  INTEGER NOT NULL REFERENCES department(id) ON DELETE CASCADE,
     PRIMARY KEY (retailer_id, department_id)
 );
+
+-- Price-check odometer (header wireframe 5b, design-v2) -- a running total
+-- of every price check ever performed, plus a cheap short-window rate for
+-- the header's "+N in the last minute" line. A dedicated aggregate instead
+-- of `SELECT COUNT(*) FROM price_observation` because that table is an
+-- ever-growing, unbounded time-series and this gets polled every 2-3s
+-- while a scan is running (see web/backend/queries.py's
+-- price_check_odometer) -- counting it live doesn't scale. Bumped by
+-- common/db.py's increment_price_check_total, called once per
+-- successfully-checked product from scanner/orchestrator.py.
+CREATE TABLE price_check_counter (
+    id            SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- singleton row
+    total_checks  BIGINT NOT NULL DEFAULT 0,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO price_check_counter (id, total_checks) VALUES (1, 0);
+
+-- Minute-bucketed counts backing the odometer's "+N in the last minute"
+-- line -- a read only ever sums the current + previous bucket row (see
+-- price_check_odometer), never a range scan over price_observation.
+-- Pruned opportunistically by increment_price_check_total (piggybacked on
+-- the same write, not a separate scheduled job) -- meant to stay a
+-- handful of rows, never an accumulating history.
+CREATE TABLE price_check_rate_bucket (
+    bucket_start  TIMESTAMPTZ PRIMARY KEY,
+    checks        INTEGER NOT NULL DEFAULT 0
+);
+
+-- 'cancelled' status for the header's "Cancel scan" button (wireframe 5b)
+-- -- a cooperative cancel (scanner/orchestrator.py's run_scan checks a
+-- stop flag at its existing progress checkpoints, see ScanCancelled)
+-- closes out whichever scan_run is currently 'running' as 'cancelled'
+-- rather than leaving it running forever or misreporting it as 'failed'.
+-- Appended as an ALTER here (not edited into scan_run's own CREATE TABLE
+-- above) per this branch's shared-file convention -- other agents are
+-- editing that table's body in parallel. The DROP/ADD pair below relies
+-- on Postgres's default name for an inline, unnamed CHECK
+-- ("<table>_<column>_check") -- true by construction on a fresh install
+-- (nothing's renamed it since the CREATE TABLE a few lines up in this same
+-- script). See docs/schema-changes-design-v2.md for the hand-runnable
+-- version against a live database, which looks the name up instead of
+-- assuming it, since a live DB's history can't be verified from here.
+ALTER TABLE scan_run DROP CONSTRAINT IF EXISTS scan_run_status_check;
+ALTER TABLE scan_run ADD CONSTRAINT scan_run_status_check
+    CHECK (status IN ('running', 'completed', 'failed', 'backoff', 'cancelled'));

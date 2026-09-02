@@ -111,6 +111,7 @@ def list_deals(
         f"""
         SELECT
             d.id AS deal_id, d.status, d.defer_rule, d.created_at, d.updated_at,
+            d.deal_kind, d.last_checked_at, extract(epoch FROM d.check_interval)::int AS check_interval_seconds,
             p.id AS product_id, p.retailer_product_id, p.name AS product_name,
             p.image_url, p.canonical_url, p.department_id, dept.name AS department_name,
             s.id AS store_id, s.name AS store_name, s.address AS store_address,
@@ -162,10 +163,15 @@ def status_bar_counts(
     department_id: int | None = None,
     department_prefix: str | None = None,
 ) -> dict[str, int]:
-    """Deals page's status-tag row: Active clearance / Waiting for a
-    deeper cut / All, within the current scope. "All" is new+active+
+    """Deals page's status-tag row: Active clearance / Watching / Waiting
+    for a deeper cut / All, within the current scope. "All" is new+active+
     deferred (everything untriaged-or-held) -- not stale/bought/dismissed,
-    same posture as list_deals' default filter."""
+    same posture as list_deals' default filter. "Watching" counts
+    deal_kind='upcoming_clearance' rows -- currently always 0 in practice,
+    since nothing in the scanner sets that kind yet (see
+    docs/schema-changes-design-v2.md); wired up now so the tag and its
+    count are correct the moment that write path lands, with no second
+    query-layer change needed."""
     # count(DISTINCT d.product_id), not count(*) -- a scope spanning more
     # than one store (the common case: "all stores" is the default) would
     # otherwise count one product with deals at 2 stores as 2 items
@@ -187,7 +193,10 @@ def status_bar_counts(
     row = conn.execute(
         f"""
         SELECT
-            count(DISTINCT d.product_id) FILTER (WHERE d.status IN ('new', 'active')) AS active,
+            count(DISTINCT d.product_id)
+                FILTER (WHERE d.status IN ('new', 'active') AND d.deal_kind != 'upcoming_clearance') AS active,
+            count(DISTINCT d.product_id)
+                FILTER (WHERE d.status IN ('new', 'active') AND d.deal_kind = 'upcoming_clearance') AS watching,
             count(DISTINCT d.product_id) FILTER (WHERE d.status = 'deferred') AS waiting,
             count(DISTINCT d.product_id) FILTER (WHERE d.status IN ('new', 'active', 'deferred')) AS all_open
         FROM deal d
@@ -200,7 +209,10 @@ def status_bar_counts(
         """,
         scope_params,
     ).fetchone()
-    return {"active": row["active"], "waiting": row["waiting"], "all": row["all_open"]}
+    return {
+        "active": row["active"], "watching": row["watching"],
+        "waiting": row["waiting"], "all": row["all_open"],
+    }
 
 
 def retailer_store_tree(conn) -> list[dict[str, Any]]:
@@ -563,3 +575,132 @@ def telegram_binding_status(conn) -> dict[str, Any]:
         "SELECT count(*) AS alerts_sent, max(sent_at) AS last_alert_at FROM alert_sent"
     ).fetchone()
     return row
+
+
+# --- shopping lists (screens 3a/3b) ------------------------------------------
+
+def store_lists(conn) -> list[dict[str, Any]]:
+    """GET /api/lists' read model. One entry per store that has at least
+    one non-removed list item (list_item.state != 'no_longer_needed' -- see
+    that table's schema docstring for why this, not deal.status, defines
+    list membership), each with item counts and items grouped by aisle
+    ascending, unaisled items collected into a trailing group (aisle=None)
+    -- both 3a (desktop, per-store cards) and 3b (mobile walking view) want
+    this same shape, so it's built once here rather than twice in route
+    handlers.
+
+    A store with zero current list items simply doesn't appear (matches
+    3a's "a store with no items has no card") -- this is naturally true of
+    the INNER JOINs below, no separate filter needed."""
+    stores = conn.execute(
+        """
+        SELECT DISTINCT s.id AS store_id, s.name AS store_name, s.address,
+               s.distance_miles, s.retailer_store_id,
+               r.slug AS retailer_slug, r.display_name AS retailer_name
+        FROM list_item li
+        JOIN deal d ON d.id = li.deal_id
+        JOIN store s ON s.id = d.store_id
+        JOIN retailer r ON r.id = s.retailer_id
+        WHERE li.state != 'no_longer_needed'
+        ORDER BY r.display_name, s.name
+        """
+    ).fetchall()
+
+    # regexp_replace strips non-digits so "Aisle 09"/"09"/"9" all sort as
+    # 9 -- aisle is free-text from the scraper (store_product_location.aisle
+    # TEXT), not guaranteed numeric-only. NULLIF'd back to NULL when that
+    # leaves nothing (a purely non-numeric aisle, or no aisle at all) so it
+    # falls to "NULLS LAST" instead of erroring the ::int cast on ''.
+    items = conn.execute(
+        """
+        SELECT
+            d.store_id, li.deal_id, li.state, li.quantity, li.purchased_at, li.cant_find_reason,
+            d.deal_kind,
+            p.name AS product_name, p.image_url, p.canonical_url, p.retailer_product_id AS sku,
+            po.price_cents, po.list_price_cents, po.stock_quantity, po.is_clearance, po.is_penny,
+            CASE WHEN po.list_price_cents > 0
+                 THEN round(100.0 * (po.list_price_cents - po.price_cents) / po.list_price_cents, 1)
+                 ELSE NULL END AS discount_pct,
+            spl.aisle, spl.bay
+        FROM list_item li
+        JOIN deal d ON d.id = li.deal_id
+        JOIN product p ON p.id = d.product_id
+        JOIN price_observation po ON po.id = d.latest_observation_id
+        LEFT JOIN store_product_location spl ON spl.product_id = d.product_id AND spl.store_id = d.store_id
+        WHERE li.state != 'no_longer_needed'
+        ORDER BY
+            (spl.aisle IS NULL),
+            NULLIF(regexp_replace(coalesce(spl.aisle, ''), '\\D', '', 'g'), '')::int NULLS LAST,
+            spl.aisle,
+            p.name
+        """
+    ).fetchall()
+
+    items_by_store: dict[int, list[dict[str, Any]]] = {}
+    for row in items:
+        items_by_store.setdefault(row["store_id"], []).append(row)
+
+    result = []
+    for store in stores:
+        store_items = items_by_store.get(store["store_id"], [])
+
+        groups: list[dict[str, Any]] = []
+        group_by_aisle: dict[str | None, dict[str, Any]] = {}
+        for item in store_items:
+            aisle = item["aisle"]
+            group = group_by_aisle.get(aisle)
+            if group is None:
+                group = {"aisle": aisle, "items": []}
+                group_by_aisle[aisle] = group
+                groups.append(group)
+            group["items"].append(item)
+        # Belt-and-suspenders: the item query already orders aisle=NULL
+        # last, so groups is already built in that order -- this stable
+        # sort just guarantees it even if that query ever changes.
+        groups.sort(key=lambda g: g["aisle"] is None)
+
+        result.append({
+            "store_id": store["store_id"],
+            "store_name": store["store_name"],
+            "retailer_slug": store["retailer_slug"],
+            "retailer_name": store["retailer_name"],
+            "retailer_store_id": store["retailer_store_id"],
+            "address": store["address"],
+            "distance_miles": store["distance_miles"],
+            "counts": {
+                "total": len(store_items),
+                "open": sum(1 for i in store_items if i["state"] == "open"),
+                "purchased": sum(1 for i in store_items if i["state"] == "purchased"),
+                "cant_find": sum(1 for i in store_items if i["state"] == "cant_find"),
+            },
+            "aisle_groups": groups,
+        })
+    return result
+
+
+def price_check_odometer(conn) -> dict[str, Any]:
+    """Backs the header's odometer (wireframe 5b): the running total of
+    every price check ever performed, plus how many landed in roughly the
+    last 60s ("+37 in the last minute"). Two cheap reads over
+    price_check_counter/price_check_rate_bucket (see
+    db/init/001_schema.sql and common/db.py's increment_price_check_total)
+    -- deliberately never `SELECT COUNT(*) FROM price_observation`, which
+    is the exact thing this aggregate exists to avoid, since
+    GET /api/scan/status is polled every 2-3s while a scan is running.
+    """
+    total_row = conn.execute("SELECT total_checks FROM price_check_counter WHERE id = 1").fetchone()
+    # Sums the current + previous minute bucket rather than an exact
+    # trailing-60s window -- a deliberate approximation (at most ~1
+    # bucket's worth of drift) in exchange for a 2-row range read instead
+    # of a sub-minute-granularity table.
+    rate_row = conn.execute(
+        """
+        SELECT COALESCE(SUM(checks), 0) AS last_minute
+        FROM price_check_rate_bucket
+        WHERE bucket_start >= date_trunc('minute', now()) - interval '1 minute'
+        """
+    ).fetchone()
+    return {
+        "total": total_row["total_checks"] if total_row else 0,
+        "last_minute": rate_row["last_minute"] if rate_row else 0,
+    }

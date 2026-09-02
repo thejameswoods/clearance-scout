@@ -157,7 +157,7 @@ def test_status_bar_counts_buckets_correctly(postgres_conn):
     db.defer_deal(postgres_conn, deferred_row["id"], "price", 1.00)
 
     counts = queries.status_bar_counts(postgres_conn)
-    assert counts == {"active": 1, "waiting": 1, "all": 2}
+    assert counts == {"active": 1, "watching": 0, "waiting": 1, "all": 2}
 
 
 def test_status_bar_counts_a_multi_store_product_once(postgres_conn):
@@ -165,7 +165,7 @@ def test_status_bar_counts_a_multi_store_product_once(postgres_conn):
     _seed(postgres_conn, store_id_str="s2", sku="sku-1")
 
     counts = queries.status_bar_counts(postgres_conn)
-    assert counts == {"active": 1, "waiting": 0, "all": 1}
+    assert counts == {"active": 1, "watching": 0, "waiting": 0, "all": 1}
 
 
 # --- list_deals: new filters -------------------------------------------------
@@ -288,7 +288,7 @@ def test_status_bar_counts_applies_retailer_min_discount(postgres_conn):
     db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 50)
 
     counts = queries.status_bar_counts(postgres_conn)
-    assert counts == {"active": 0, "waiting": 0, "all": 0}
+    assert counts == {"active": 0, "watching": 0, "waiting": 0, "all": 0}
 
 
 def test_set_retailer_min_discount_pct_clears_with_none(postgres_conn):

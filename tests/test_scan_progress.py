@@ -72,3 +72,48 @@ def test_no_progress_callback_is_fine(postgres_conn):
 
     # Should not raise just because on_progress wasn't provided.
     run_scan(postgres_conn, FakeBrowserContext(), adapter, zip_code="00000")
+
+
+def test_avg_department_size_reported_once_department_size_known(postgres_conn):
+    """Feeds scanner/settings.py's eta_seconds (header wireframe 5b's
+    "~6 min left") -- a running average across departments seen so far
+    this scan, not per-poll recomputation."""
+    depts = [
+        Department(retailer_department_id="dept-1", name="Widgets"),
+        Department(retailer_department_id="dept-2", name="Gadgets"),
+    ]
+    products = {
+        "dept-1": [ProductRef(retailer_product_id=f"sku-{i}", name=f"Item {i}", department=depts[0]) for i in range(4)],
+        "dept-2": [ProductRef(retailer_product_id=f"sku-{i}", name=f"Item {i}", department=depts[1]) for i in range(2)],
+    }
+    adapter = ConfigurableFakeAdapter(departments=depts, products_by_department=products)
+
+    events = []
+    run_scan(postgres_conn, FakeBrowserContext(), adapter, zip_code="00000", on_progress=events.append)
+
+    avg_sizes = [e["avg_department_size"] for e in events if "avg_department_size" in e]
+    assert avg_sizes == [4.0, 3.0]  # dept-1 alone (4), then (4+2)/2 once dept-2's size is known
+
+
+def test_price_checks_total_reported_and_monotonic(postgres_conn):
+    """Feeds the header odometer (wireframe 5b) -- run_scan bumps the
+    shared counter (common/db.py's increment_price_check_total) once per
+    successfully-checked product (persisted to Postgres every time), and
+    reports the running total via on_progress at the same cadence as the
+    existing heartbeat/department-done checkpoints (not a new event per
+    item -- see the comment above price_checks_total's assignment in
+    orchestrator.py) so every progress event still carries a full,
+    consistent field set."""
+    dept = Department(retailer_department_id="dept-1", name="Widgets")
+    products = {"dept-1": [ProductRef(retailer_product_id=f"sku-{i}", name=f"Item {i}", department=dept) for i in range(25)]}
+    adapter = ConfigurableFakeAdapter(departments=[dept], products_by_department=products)
+
+    events = []
+    run_scan(postgres_conn, FakeBrowserContext(), adapter, zip_code="00000", on_progress=events.append)
+
+    totals = [e["price_checks_total"] for e in events if "price_checks_total" in e]
+    # Heartbeats at i=10, i=20, then the final department-done event at 25.
+    assert totals == [10, 20, 25]
+
+    from common import db
+    assert db.increment_price_check_total(postgres_conn, by=0) == 25  # persisted, not just in-memory

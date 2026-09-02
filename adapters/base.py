@@ -114,6 +114,11 @@ class RetailerAdapter(ABC):
     fingerprint. See adapters/README.md for the full contract writeup."""
 
     retailer_slug: str
+    # Human-readable name for db.upsert_retailer's display_name column and
+    # the header wireframe 5b's phase breadcrumb -- distinct from
+    # retailer_slug so "home_depot" never leaks into UI text (found
+    # 2026-09-02: orchestrator.py was passing the slug for both).
+    retailer_display_name: str
 
     @abstractmethod
     def authenticate(self, browser_ctx: Any) -> AuthResult:

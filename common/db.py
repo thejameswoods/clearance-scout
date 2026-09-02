@@ -48,8 +48,14 @@ def get_retailer_by_slug(conn, slug: str) -> dict[str, Any] | None:
     """Read-only lookup (unlike upsert_retailer) -- None for a slug that's
     never been scanned yet, so a caller can tell "not configured yet, use
     pure env defaults" apart from "configured, has a real id/enabled
-    flag" without creating a row just to check."""
-    return conn.execute("SELECT id, enabled FROM retailer WHERE slug = %s", (slug,)).fetchone()
+    flag" without creating a row just to check.
+
+    display_name added for scanner/main.py's _scan_all (header wireframe
+    5b's phase breadcrumb, "Home Depot > ...") -- upsert_retailer today
+    sets it equal to the slug (e.g. "home_depot"), a pre-existing data
+    quality gap unrelated to this change; see
+    docs/schema-changes-design-v2.md."""
+    return conn.execute("SELECT id, enabled, display_name FROM retailer WHERE slug = %s", (slug,)).fetchone()
 
 
 def set_retailer_min_discount_pct(conn, retailer_id: int, min_discount_pct: float | None) -> None:
@@ -224,7 +230,7 @@ def upsert_deal_from_observation(conn, product_id: int, store_id: int, observati
         was_inactive = existing["status"] in ("stale",)
         conn.execute(
             """
-            UPDATE deal SET latest_observation_id = %s, updated_at = now(),
+            UPDATE deal SET latest_observation_id = %s, updated_at = now(), last_checked_at = now(),
                 status = CASE WHEN status IN ('bought', 'dismissed', 'saved') THEN status
                               WHEN status = 'stale' THEN 'active' ELSE status END
             WHERE id = %s
@@ -233,13 +239,19 @@ def upsert_deal_from_observation(conn, product_id: int, store_id: int, observati
         )
         return existing["id"], was_inactive
     else:
+        # deal_kind: 'penny' when this hit is a penny item, else the column
+        # default 'active_clearance' -- 'upcoming_clearance' is never set
+        # here, see docs/schema-changes-design-v2.md (no scanner path
+        # creates a deal row for a still-full-price item yet).
+        deal_kind = "penny" if is_penny else "active_clearance"
         row = conn.execute(
             """
-            INSERT INTO deal (product_id, store_id, first_observation_id, latest_observation_id, status)
-            VALUES (%s, %s, %s, %s, 'new')
+            INSERT INTO deal (product_id, store_id, first_observation_id, latest_observation_id,
+                               status, deal_kind, last_checked_at)
+            VALUES (%s, %s, %s, %s, 'new', %s, now())
             RETURNING id
             """,
-            (product_id, store_id, observation_id, observation_id),
+            (product_id, store_id, observation_id, observation_id, deal_kind),
         ).fetchone()
         return row["id"], True
 
@@ -335,6 +347,146 @@ def reactivate_satisfied_defers(conn) -> int:
         """
     ).fetchall()
     return len(rows)
+
+
+# --- shopping list items (screens 3a/3b) ------------------------------------
+# See db/init/001_schema.sql's list_item docstring for why this is keyed by
+# deal_id rather than a fresh (product_id, store_id) pair.
+
+def add_deal_to_list(conn, deal_id: int, quantity: int | None = None) -> None:
+    """Puts (or re-puts) a deal on its store's list -- called by both the
+    existing POST /api/deals/{id}/save (screen 2a's "Want") and the
+    per-store "Add to this store's list" buttons on an expanded multi-store
+    row. ON CONFLICT reopens a list_item that was previously
+    no_longer_needed/purchased/cant_find rather than erroring -- re-adding
+    something you'd resolved is a normal flow (e.g. you marked something
+    can't-find, then decided to try again next trip), not an edge case.
+
+    Also sets deal.status='saved' (dual write, same posture as
+    mark_list_item_purchased's -> 'bought') -- this is the one place list
+    membership begins, so it owns keeping that legacy field in sync rather
+    than leaving it to every caller to remember."""
+    conn.execute("UPDATE deal SET status = 'saved', updated_at = now() WHERE id = %s", (deal_id,))
+    conn.execute(
+        """
+        INSERT INTO list_item (deal_id, state, quantity)
+        VALUES (%s, 'open', %s)
+        ON CONFLICT (deal_id) DO UPDATE SET
+            state = 'open', quantity = COALESCE(EXCLUDED.quantity, list_item.quantity),
+            purchased_at = NULL, cant_find_reason = NULL, updated_at = now()
+        """,
+        (deal_id, quantity),
+    )
+
+
+def set_list_item_quantity(conn, deal_id: int, quantity: int | None) -> None:
+    conn.execute(
+        "UPDATE list_item SET quantity = %s, updated_at = now() WHERE deal_id = %s",
+        (quantity, deal_id),
+    )
+
+
+def mark_list_item_purchased(conn, deal_id: int) -> None:
+    """Also dual-writes deal.status='bought' -- same pattern as
+    dismiss_product's dual-write to deal.status (History and the old
+    POST /api/deals/{id}/bought both still read deal.status, unaffected by
+    this feature)."""
+    conn.execute(
+        """
+        UPDATE list_item SET state = 'purchased', purchased_at = now(),
+            cant_find_reason = NULL, updated_at = now()
+        WHERE deal_id = %s
+        """,
+        (deal_id,),
+    )
+    conn.execute("UPDATE deal SET status = 'bought', updated_at = now() WHERE id = %s", (deal_id,))
+
+
+def mark_list_item_cant_find(conn, deal_id: int, reason: str | None) -> None:
+    """Stays on the list (handoff: "kept for next trip") -- unlike
+    purchased/no_longer_needed, deal.status is left alone (still 'saved')."""
+    conn.execute(
+        """
+        UPDATE list_item SET state = 'cant_find', cant_find_reason = %s,
+            purchased_at = NULL, updated_at = now()
+        WHERE deal_id = %s
+        """,
+        (reason, deal_id),
+    )
+
+
+def mark_list_item_no_longer_needed(conn, deal_id: int) -> None:
+    """Removes the item from its list (store_lists' read query excludes
+    state='no_longer_needed') WITHOUT touching product.dismissed_at -- the
+    handoff is explicit that this is a different, permanent, product-level
+    action (see dismiss_product) and no_longer_needed must not trigger it.
+    deal.status is also left alone (not reverted from 'saved') -- it isn't
+    read anywhere except History/the old list-by-status=saved view, and
+    reverting it risks surprising whichever of those still exists."""
+    conn.execute(
+        """
+        UPDATE list_item SET state = 'no_longer_needed', purchased_at = NULL,
+            cant_find_reason = NULL, updated_at = now()
+        WHERE deal_id = %s
+        """,
+        (deal_id,),
+    )
+
+
+def reopen_list_item(conn, deal_id: int) -> None:
+    """Undo for any of the three resolutions above -- the walking view's
+    Undo control. Symmetric dual-write-undo with mark_list_item_purchased:
+    if deal.status was flipped to 'bought', put it back to 'saved' so a
+    reopened item doesn't disappear from anything still reading
+    deal.status. Safe to call on an already-open item (no-op state change)."""
+    row = conn.execute("SELECT state FROM list_item WHERE deal_id = %s", (deal_id,)).fetchone()
+    if not row:
+        return
+    conn.execute(
+        """
+        UPDATE list_item SET state = 'open', purchased_at = NULL, cant_find_reason = NULL, updated_at = now()
+        WHERE deal_id = %s
+        """,
+        (deal_id,),
+    )
+    if row["state"] == "purchased":
+        conn.execute(
+            "UPDATE deal SET status = 'saved', updated_at = now() WHERE id = %s AND status = 'bought'",
+            (deal_id,),
+        )
+
+
+def clear_finished_list_items(conn, store_id: int) -> int:
+    """"Clear finished" (screen 3a's card footer) -- hard-deletes purchased
+    list_item rows for one store's deals. A delete, not a state change: the
+    handoff draws Undo only for the walking view's per-item resolutions
+    (reopen_list_item above covers that), not for this bulk action, and
+    deal.status='bought' (still set) keeps the purchase in History
+    regardless of this row going away."""
+    rows = conn.execute(
+        """
+        DELETE FROM list_item li USING deal d
+        WHERE li.deal_id = d.id AND d.store_id = %s AND li.state = 'purchased'
+        RETURNING li.id
+        """,
+        (store_id,),
+    ).fetchall()
+    return len(rows)
+
+
+def shorten_check_interval(conn, deal_id: int) -> None:
+    """"Close eye" (screen 2a, replaces "Want" on a Watching row) -- halves
+    the check cadence, floored at 15 minutes so repeated clicks can't spin
+    a deal down to an effectively-continuous poll. Computed in SQL (not
+    read-then-write in Python) so it's atomic under concurrent requests."""
+    conn.execute(
+        """
+        UPDATE deal SET check_interval = GREATEST(check_interval / 2, INTERVAL '15 minutes'),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (deal_id,),
+    )
 
 
 def record_rate_limit_event(conn, retailer_id: int, event_type: str, detail: str | None) -> None:
@@ -601,3 +753,52 @@ def set_watched_departments(conn, retailer_id: int, department_ids: list[int]) -
             "INSERT INTO watched_department (retailer_id, department_id) VALUES (%s, %s)",
             (retailer_id, department_id),
         )
+
+
+# --- price-check odometer (header wireframe 5b, design-v2) ------------------
+
+def increment_price_check_total(conn, by: int = 1) -> int:
+    """Bumps the header's price-check odometer (price_check_counter +
+    price_check_rate_bucket, db/init/001_schema.sql) -- called once per
+    successfully-checked product from scanner/orchestrator.py's price-check
+    loops (run_scan, refresh_single_product), right alongside the
+    insert_price_observation call for that same item, so it rides the same
+    per-item DB round trip instead of adding a new one.
+
+    Deliberately NOT `SELECT COUNT(*) FROM price_observation` -- that table
+    is an ever-growing, unbounded time-series and the odometer gets read
+    every 2-3s while a scan is running (see web/backend/queries.py's
+    price_check_odometer) -- counting it live doesn't scale. This is a
+    single-row PK upsert plus a per-minute-bucket upsert instead, both O(1).
+
+    An INSERT ... ON CONFLICT against the singleton row (id=1) rather than
+    a plain UPDATE -- self-healing if the seed row from 001_schema.sql is
+    ever missing (e.g. a hand-run schema-changes-design-v2.md apply that
+    skipped it) instead of silently no-op'ing. Returns the new running
+    total so the caller can hand it straight to on_progress without a
+    second read.
+    """
+    total_row = conn.execute(
+        """
+        INSERT INTO price_check_counter (id, total_checks) VALUES (1, %s)
+        ON CONFLICT (id) DO UPDATE SET
+            total_checks = price_check_counter.total_checks + EXCLUDED.total_checks,
+            updated_at = now()
+        RETURNING total_checks
+        """,
+        (by,),
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO price_check_rate_bucket (bucket_start, checks)
+        VALUES (date_trunc('minute', now()), %s)
+        ON CONFLICT (bucket_start) DO UPDATE SET checks = price_check_rate_bucket.checks + %s
+        """,
+        (by, by),
+    )
+    # Opportunistic prune -- only the current and previous minute are ever
+    # read (see price_check_odometer), so anything older is dead weight.
+    # Piggybacks on this same write instead of a separate scheduled job;
+    # cheap since the table only ever holds a handful of rows to begin with.
+    conn.execute("DELETE FROM price_check_rate_bucket WHERE bucket_start < now() - interval '5 minutes'")
+    return total_row["total_checks"]

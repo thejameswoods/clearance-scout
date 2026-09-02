@@ -12,11 +12,24 @@
   <header class="topbar">
     <h1>🛒 Clearance Scout</h1>
     <div class="scan-status">
-      <span id="scan-progress-detail" class="progress-detail" hidden></span>
-      <span id="scan-state-badge" class="badge">checking…</span>
+      <span id="scan-state-badge" class="badge" hidden></span>
+      <!-- Header wireframe 5b's quiet idle running total -- hidden while
+           scanning (the status bar below carries the odometer then) and
+           whenever the total hasn't loaded yet. Plain comma-formatted text,
+           not the mechanical digit-cell odometer -- that treatment is only
+           legible at the scanning status bar's larger size (screenshot
+           08-shopping-lists showed it unreadable run inline here). -->
+      <span id="scan-idle-summary" class="scan-idle-summary" hidden>
+        <span id="scan-idle-text" class="scan-idle-text"></span>
+      </span>
       <button id="scan-now-btn">Scan now</button>
     </div>
   </header>
+
+  <!-- Header wireframe 5b, row 2: renders only while scanner.state ===
+       "scanning" (toggled in app.js's refreshScanStatus) -- not a
+       permanently-reserved strip, so it stays `hidden` here by default. -->
+  <div id="scan-status-bar" class="scan-status-bar" hidden></div>
 
   <nav class="tabs">
     <button class="tab-btn active" data-tab="deals">Deals</button>
@@ -88,8 +101,12 @@
       </div>
     </section>
 
+    <!-- Screen 3a (shopping lists, desktop) -- web/frontend/app.js's
+         renderShoppingLists() owns everything under here: the summary bar,
+         the per-store card grid (or collapsed row), and a #print-area it
+         populates on demand for the Print button (see style.css's
+         `@media print` block, bottom of file). -->
     <section id="tab-shopping" class="tab-panel">
-      <p class="meta">Items you've saved, grouped by store and department/aisle.</p>
       <div id="shopping-list-content"></div>
     </section>
 
@@ -133,7 +150,16 @@
 
   <footer class="build-footer">Build: <span id="build-time">…</span></footer>
 
-  <div id="deal-modal" class="modal hidden">
+  <!-- Screen 3b (mobile walking view) -- deliberately outside <main>, not
+       a tab: it's reached from a 3a store card's "Open walking view", not
+       the top nav (see AGENT_BRIEF.md -- nav is off-limits to this agent).
+       app.js's openWalkingView()/closeWalkingView() toggle [hidden];
+       renderWalkingView() fills .wv-panel. -->
+  <div id="walking-view" class="wv-overlay" hidden>
+    <div class="wv-panel"></div>
+  </div>
+
+  <div id="deal-modal" class="modal" hidden>
     <div class="modal-content">
       <button id="modal-close" class="modal-close">&times;</button>
       <div id="modal-body"></div>

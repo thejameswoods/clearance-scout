@@ -23,6 +23,20 @@ function relTime(dateStr) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+// Compact absolute stamp for the Detected column's second line ("Aug 31 ·
+// 4:12p") -- `toLocaleString()`'s full date+time ("9/2/2026, 3:15:12 PM")
+// wraps onto two lines in the 96px column (screenshot 14-header-scanning).
+function absTimeCompact(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  const month = d.toLocaleString("en-US", { month: "short" });
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "p" : "a";
+  hours = hours % 12 || 12;
+  return `${month} ${d.getDate()} · ${hours}:${minutes}${ampm}`;
+}
+
 function mapsLink(address) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
@@ -67,7 +81,11 @@ function dvDiscountTag(rows) {
   const pcts = rows.map((r) => r.discount_pct).filter((p) => p != null);
   const anyPenny = rows.some((r) => r.is_penny);
   if (pcts.length === 0) return anyPenny ? `<span class="dv-tag penny">Penny</span>` : "";
-  const lo = Math.min(...pcts), hi = Math.max(...pcts);
+  // discount_pct comes from the backend rounded to one decimal (queries.py's
+  // list_deals), not a whole percent -- round only for display here so the
+  // underlying value used for sorting/filtering stays precise. round() is
+  // monotonic, so rounding after min/max === min/max of the rounded values.
+  const lo = Math.round(Math.min(...pcts)), hi = Math.round(Math.max(...pcts));
   const text = lo === hi ? `${lo}%` : `${lo}%–${hi}%`;
   return `<span class="dv-tag">${text}</span>`;
 }
@@ -113,7 +131,14 @@ function cheapestRow(rows) {
 
 const LAST_VISIT_KEY = "deals_last_visit_at";
 
-async function loadDeals() {
+// resetWindow: true for anything that changes *what* the feed contains
+// (scope, status tag, triage-new-only, search/sort/filters) so the render
+// window starts back at the top of the new result set; left false (the
+// default) for in-place mutations (want/dismiss/defer/undo) and the
+// periodic background refresh, which should leave the user's scroll
+// position alone -- see renderDealListFooter/extendDealWindow.
+async function loadDeals({ resetWindow = false } = {}) {
+  if (resetWindow) dealWindowSize = DEAL_PAGE_SIZE;
   const params = new URLSearchParams();
   const search = $("#f-search").value.trim();
   if (search) params.set("search", search);
@@ -137,7 +162,13 @@ async function loadDeals() {
   if ($("#f-in-stock").checked) params.set("in_stock_only", "true");
   params.set("sort", $("#f-sort").value);
 
-  const allDeals = await api(`/api/deals?${params.toString()}`);
+  const rawDeals = await api(`/api/deals?${params.toString()}`);
+  // deal_kind isn't a /api/deals query param (queries.list_deals has no
+  // such filter) -- "watching" and "active" both fetch status=['new',
+  // 'active'] and split on deal_kind here, mirroring status_bar_counts'
+  // own active-excludes-watching split so the feed and the status tag
+  // counts never disagree.
+  const allDeals = filterByDealKind(rawDeals, scope.statusFilter);
   const lastVisit = localStorage.getItem(LAST_VISIT_KEY);
   const newCount = lastVisit ? allDeals.filter((d) => d.created_at > lastVisit).length : 0;
   const displayDeals = (window._triageNewOnly && lastVisit)
@@ -149,14 +180,45 @@ async function loadDeals() {
   renderNewBar({ newCount, total: allDeals.length, triageActive: window._triageNewOnly && !!lastVisit });
 }
 
+// "Chapel Hill #3612" -- screen 2a's store name plus the retailer's own
+// store number, everywhere a store is named in the deal row. Falls back to
+// the bare retailer_store_id (no "#") when store_name hasn't backfilled
+// yet, matching the old fallback -- so a missing name never renders as the
+// id twice ("#3612 #3612").
+function storeLabel(row) {
+  if (!row.store_name) return row.retailer_store_id || "";
+  return row.retailer_store_id ? `${row.store_name} #${row.retailer_store_id}` : row.store_name;
+}
+
 function renderStoreLineHtml(productId, rows) {
   if (rows.length === 1) {
     const r = rows[0];
     const stock = stockText(r);
-    return `${escapeHtml(r.store_name || r.retailer_store_id)}${r.aisle ? ` · Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""}${stock ? ` · ${stock}` : ""}`;
+    return `${escapeHtml(storeLabel(r))}${r.aisle ? ` · Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""}` : ""}${stock ? ` · ${stock}` : ""}`;
   }
   return `<span class="dv-expand-toggle" data-toggle-for="${productId}">▾ ${rows.length} of ${rows.length} stores</span>`;
 }
+
+// Leaf-only department label for the row's subline ("Pressure Treated ·
+// SKU ..."), not the full space-joined breadcrumb department_name stores
+// (see build_department_hierarchy's docstring -- "Electrical Batteries AA
+// Batteries" is one flattened string, not three). Reuses the same
+// tree-walk as openProductDetail's breadcrumb rather than re-parsing.
+function leafDepartmentLabel(departmentName) {
+  const labels = departmentBreadcrumbLabels(departmentName);
+  return labels.length ? labels[labels.length - 1] : departmentName;
+}
+
+// Windowed rendering (Task 1, HANDOFF_DEALS_PAGE.md screen 2a's list
+// footer). /api/deals has no pagination -- queries.list_deals's LIMIT 500
+// is a ceiling, everything reachable is fetched every load -- so instead
+// of asking the API for a page, this only *renders* a window of the
+// already-fetched groups and lets the footer/scroll/J-past-the-end grow
+// it. dealWindowSize is a module-level cursor (not per-call state) so
+// wiring code elsewhere (extendDealWindow, the keyboard handler) can grow
+// it without threading it through every call site.
+const DEAL_PAGE_SIZE = 50;
+let dealWindowSize = DEAL_PAGE_SIZE;
 
 function renderDealsTable(groups) {
   const list = $("#deal-list");
@@ -164,35 +226,46 @@ function renderDealsTable(groups) {
   list.innerHTML = "";
   empty.hidden = groups.size > 0;
 
-  for (const [productId, rows] of groups) {
+  const entries = Array.from(groups.entries()).slice(0, dealWindowSize);
+  for (const [productId, rows] of entries) {
     const first = rows[0];
     const cheapest = cheapestRow(rows);
     const addedAt = rows.reduce((min, r) => (r.created_at < min ? r.created_at : min), first.created_at);
     const isDeferred = rows.every((r) => r.status === "deferred");
+    // deal_kind='upcoming_clearance' -- flagged as a future markdown, price
+    // still full. Nothing in the scanner writes this kind yet (see
+    // queries.status_bar_counts' docstring), so this is always false in
+    // practice today; built to the spec anyway so the row renders
+    // correctly the moment that write path lands.
+    const isWatching = rows.every((r) => r.deal_kind === "upcoming_clearance");
+    const thumbLink = productLink(cheapest.canonical_url, cheapest.retailer_store_id);
+    const thumbHtml = first.image_url
+      ? `<img class="dv-thumb${isWatching ? " dv-thumb-watching" : ""}" src="${first.image_url}" alt="">`
+      : `<div class="dv-thumb-placeholder${isWatching ? " dv-thumb-watching" : ""}"></div>`;
 
     const row = document.createElement("div");
     row.className = "deal-row";
     row.dataset.product = productId;
     row.innerHTML = `
-      ${first.image_url ? `<img class="dv-thumb" src="${first.image_url}" alt="">` : `<div class="dv-thumb-placeholder"></div>`}
+      <a class="dv-thumb-link" href="${thumbLink}" target="_blank" rel="noopener">${thumbHtml}</a>
       <div class="dv-body">
         <div class="dv-name">
-          <a href="${productLink(cheapest.canonical_url, cheapest.retailer_store_id)}" target="_blank" rel="noopener">${escapeHtml(first.product_name)}</a>
+          <a href="${thumbLink}" target="_blank" rel="noopener">${escapeHtml(first.product_name)}</a>
           ${rows.length > 1 ? `<span class="dv-store-badge">↗ ${escapeHtml(cheapest.retailer_store_id || "")}</span>` : ""}
         </div>
-        <div class="dv-subline">${first.department_name ? escapeHtml(first.department_name) + " · " : ""}SKU ${escapeHtml(first.retailer_product_id)}</div>
-        <div class="dv-store-line">${renderStoreLineHtml(productId, rows)}</div>
+        <div class="dv-subline">${first.department_name ? escapeHtml(leafDepartmentLabel(first.department_name)) + " · " : ""}SKU ${escapeHtml(first.retailer_product_id)}</div>
+        <div class="dv-store-line">${isWatching ? escapeHtml(watchingNoteText(first)) : renderStoreLineHtml(productId, rows)}</div>
         ${isDeferred ? `<div class="dv-deferred-note">${deferredNoteText(cheapest)}</div>` : ""}
       </div>
       <div class="dv-price">
         <div class="now">${priceRangeText(rows)}</div>
-        ${first.list_price_cents ? `<div class="was">${money(first.list_price_cents)}</div>` : ""}
+        ${isWatching ? `<div class="dv-no-drop">no drop yet</div>` : (first.list_price_cents ? `<div class="was">${money(first.list_price_cents)}</div>` : "")}
       </div>
       <div class="dv-detected">
         <div class="rel">${relTime(addedAt)}</div>
-        <div class="abs">${new Date(addedAt).toLocaleString()}</div>
+        <div class="abs">${absTimeCompact(addedAt)}</div>
       </div>
-      <div class="dv-discount">${dvDiscountTag(rows)}</div>
+      <div class="dv-discount">${isWatching ? `<span class="dv-tag muted">Watching</span>` : dvDiscountTag(rows)}</div>
       <div class="dv-actions">
         <button class="dv-refresh-btn" data-product="${productId}" type="button" title="Check this item across every store, right now">⟳</button>
         ${isDeferred ? `
@@ -202,7 +275,7 @@ function renderDealsTable(groups) {
           </div>
         ` : `
           <div class="dv-split">
-            <button class="dv-want-btn" data-deal="${cheapest.deal_id}">Want</button>
+            <button class="${isWatching ? "dv-close-eye-btn close-eye-btn" : "dv-want-btn"}" data-deal="${cheapest.deal_id}">${isWatching ? "Close eye" : "Want"}</button>
             <button class="dv-not-interested-btn not-interested-btn" data-product="${productId}" data-name="${escapeHtml(first.product_name)}">Not interested</button>
             <button class="dv-not-yet-caret not-yet-caret" data-deal="${cheapest.deal_id}" data-product-name="${escapeHtml(first.product_name)}" type="button">▾</button>
           </div>
@@ -226,7 +299,7 @@ function renderDealsTable(groups) {
         .map(
           (r) => `
           <div class="dv-expand-item">
-            <a href="${productLink(r.canonical_url, r.retailer_store_id)}" target="_blank" rel="noopener">${escapeHtml(r.store_name || r.retailer_store_id)} ↗</a>
+            <a href="${productLink(r.canonical_url, r.retailer_store_id)}" target="_blank" rel="noopener">${escapeHtml(storeLabel(r))} ↗</a>
             <span class="dv-expand-meta">${r.aisle ? `Aisle ${escapeHtml(r.aisle)}${r.bay ? "/" + escapeHtml(r.bay) : ""} · ` : ""}${stockText(r) ? stockText(r) + " · " : ""}detected ${relTime(r.created_at)}</span>
             <span class="dv-expand-price">${money(r.price_cents)}</span>
             <button class="add-store-btn" data-deal="${r.deal_id}">Add to this store's list</button>
@@ -237,7 +310,64 @@ function renderDealsTable(groups) {
     }
   }
 
+  // groups is Map-ordered by the API's own sort (insertion order from
+  // groupByProduct), so slicing the first dealWindowSize entries and
+  // always emitting a multi-store group's expand row in the same pass as
+  // its parent row keeps an expanded group from ever being split across
+  // the window boundary -- there is no row-level cut, only a group-level
+  // one.
+  renderDealListFooter(groups.size, entries.length);
   wireDealRowActions(list);
+}
+
+// "28 more · J/K move · W want · D never show again" (screen 2a's list
+// footer). /api/deals has no pagination (queries.list_deals's own LIMIT
+// 500 is a ceiling, not a page) -- `totalCount` is every fetched-but-
+// maybe-unrendered group, `renderedCount` is what's actually on screen
+// (dealWindowSize, clamped by renderDealsTable). "N more" is always the
+// true difference, honest even mid-scroll, and doubles as a click target.
+function renderDealListFooter(totalCount, renderedCount) {
+  let footer = $("#deal-list-footer");
+  if (!footer) {
+    footer = document.createElement("div");
+    footer.id = "deal-list-footer";
+    footer.className = "dv-list-footer";
+    $("#deal-list").insertAdjacentElement("afterend", footer);
+  }
+  const remaining = totalCount - renderedCount;
+  const parts = [];
+  if (remaining > 0) parts.push(`<button type="button" id="deal-load-more-btn" class="dv-load-more-btn">${remaining} more</button>`);
+  parts.push("J/K move", "W want", "D never show again");
+  footer.innerHTML = parts.join(" · ");
+  footer.hidden = totalCount === 0;
+  $("#deal-load-more-btn")?.addEventListener("click", extendDealWindow);
+  setupDealListScrollLoader(footer);
+}
+
+// Grows the render window by one page (Task 1) -- called from the footer's
+// "N more" button, the scroll-triggered observer below, and J past the
+// last rendered row. Re-renders the whole table rather than appending so
+// the footer count and expand-row wiring stay correct in one place; the
+// dataset (window._dealGroups) is already fully fetched, so this is a
+// cheap re-render, not a network round trip.
+function extendDealWindow() {
+  if (!window._dealGroups || dealWindowSize >= window._dealGroups.size) return;
+  dealWindowSize = Math.min(dealWindowSize + DEAL_PAGE_SIZE, window._dealGroups.size);
+  renderDealsTable(window._dealGroups);
+}
+
+// Auto-loads more once the footer scrolls into view, per the brief's
+// "load more on scroll or via a control in the footer". Re-observes the
+// (stable, id-based) footer element on every render rather than trying to
+// track observer lifecycle across renderDealsTable's list.innerHTML reset.
+let dealFooterObserver = null;
+function setupDealListScrollLoader(footer) {
+  if (!("IntersectionObserver" in window)) return;
+  dealFooterObserver?.disconnect();
+  dealFooterObserver = new IntersectionObserver((entries) => {
+    if (entries[0]?.isIntersecting) extendDealWindow();
+  }, { rootMargin: "200px" });
+  dealFooterObserver.observe(footer);
 }
 
 function deferredNoteText(row) {
@@ -246,6 +376,16 @@ function deferredNoteText(row) {
   if (rule.type === "penny") return "Waiting for penny status.";
   if (rule.type === "price") return `Waiting for price to drop below ${money(Math.round(rule.value * 100))}.`;
   return `Waiting for ≥${rule.value}% off.`;
+}
+
+// Screen 2a's Watching-row store line: "Flagged as upcoming clearance —
+// price still full. Checked every 2h, last 14m ago." -- built from the
+// same check_interval_seconds/last_checked_at list_deals already returns
+// for defer-threshold rows, not a new backend field.
+function watchingNoteText(row) {
+  const interval = formatDuration(row.check_interval_seconds) || "?";
+  const checkedAgo = row.last_checked_at ? relTime(row.last_checked_at) : "unknown";
+  return `Flagged as upcoming clearance — price still full. Checked every ${interval}, last ${checkedAgo}.`;
 }
 
 function wireDealRowActions(list) {
@@ -279,6 +419,16 @@ function wireDealRowActions(list) {
       await api(`/api/deals/${btn.dataset.deal}/undefer`, { method: "POST" });
       loadDeals();
       loadTree();
+    })
+  );
+  // Watching row's "Close eye" -- shortens this deal's price-check
+  // interval (see queries.py's close_eye route docstring). Stays in the
+  // Watching feed afterward; it's a cadence change, not a disposition.
+  list.querySelectorAll(".close-eye-btn").forEach((btn) =>
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/deals/${btn.dataset.deal}/close-eye`, { method: "POST" });
+      loadDeals();
     })
   );
   list.querySelectorAll(".not-yet-caret").forEach((btn) =>
@@ -439,11 +589,6 @@ async function undoLastAction() {
 
 function renderNewBar({ newCount, total, triageActive }) {
   const bar = $("#new-bar");
-  if (newCount === 0 && !window._lastAction) {
-    bar.hidden = true;
-    return;
-  }
-  bar.hidden = false;
   const parts = [];
   if (newCount > 0) {
     parts.push(`<span><strong>${newCount} new</strong> · ${total} total</span>`);
@@ -452,10 +597,18 @@ function renderNewBar({ newCount, total, triageActive }) {
   if (window._lastAction) {
     parts.push(`<span>Last ${escapeHtml(window._lastAction.label)} <button type="button" id="undo-btn" class="dv-btn dv-btn-outline">undo</button></span>`);
   }
+  // Single source of truth for visibility -- bar.hidden previously had its
+  // own separate condition (newCount === 0 && !lastAction) that duplicated
+  // this logic instead of deriving from it, and .new-bar's unconditional
+  // `display: flex` beats the `[hidden]` UA rule at equal specificity (see
+  // .new-bar[hidden] below), so a drifted condition rendered as a visible
+  // empty accent strip rather than nothing -- confirmed live 2026-09-02.
+  bar.hidden = parts.length === 0;
+  if (bar.hidden) return;
   bar.innerHTML = parts.join("");
   $("#triage-new-btn")?.addEventListener("click", () => {
     window._triageNewOnly = !window._triageNewOnly;
-    loadDeals();
+    loadDeals({ resetWindow: true });
   });
   $("#undo-btn")?.addEventListener("click", undoLastAction);
 }
@@ -665,7 +818,7 @@ function openProductDetail(productId) {
     btn.addEventListener("click", () => closeModal())
   );
 
-  $("#deal-modal").classList.remove("hidden");
+  $("#deal-modal").hidden = false;
 
   api(`/api/deals/${cheapest.deal_id}`)
     .then((detail) => {
@@ -683,69 +836,657 @@ function openProductDetail(productId) {
     });
 }
 
-async function loadShoppingList() {
-  const rows = await api("/api/deals?status=saved&sort=recent");
-  const container = $("#shopping-list-content");
-  container.innerHTML = "";
+// --- Screens 3a (shopping lists, desktop) / 3b (walking view, mobile) ------
+// Full rewrite per docs/HANDOFF_DEALS_PAGE.md -- the pre-redesign version
+// above grouped by department and read /api/deals?status=saved, which
+// can't distinguish "still wanted" from "marked no longer needed" (both
+// keep deal.status='saved' -- see list_item's schema docstring). /api/lists
+// (web/backend/routes/lists.py) is the only correct source of list
+// membership now: it excludes state='no_longer_needed' server-side.
+//
+// `listsData` is the last GET /api/lists response, shared by both screens
+// so an action taken in the walking view (3b) is reflected immediately if
+// the user backs out to the grid (3a) without an extra round trip beyond
+// the one refetch each mutating action already does.
+let listsData = null;
+// Per-store desktop expand/collapse (session-only, matches 3a's "overflow
+// stores can render collapsed" -- the wireframe doesn't give a threshold,
+// so this defaults to "first row of the 2-column grid open, the rest
+// collapsed" and remembers manual Expand clicks across re-renders.
+const slCollapsed = new Map();
 
-  if (rows.length === 0) {
-    container.innerHTML = `<p class="meta">Nothing saved yet — use "Save" on a deal to add it here.</p>`;
+async function loadShoppingList() {
+  listsData = await api("/api/lists");
+  renderShoppingLists();
+}
+
+function renderShoppingLists() {
+  const container = $("#shopping-list-content");
+  const stores = listsData.stores;
+
+  if (stores.length === 0) {
+    container.innerHTML = `<p class="meta">Nothing on a list yet — use "Want" on a deal (Deals tab) to add it to that store's list.</p>`;
     return;
   }
 
-  const byStore = new Map();
-  for (const r of rows) {
-    const key = r.store_id;
-    if (!byStore.has(key)) byStore.set(key, { name: r.store_name, address: r.store_address, sections: new Map() });
-    const store = byStore.get(key);
-    const sectionKey = r.department_name || "Other";
-    if (!store.sections.has(sectionKey)) store.sections.set(sectionKey, []);
-    store.sections.get(sectionKey).push(r);
-  }
+  const cards = stores
+    .map((store, idx) => {
+      if (!slCollapsed.has(store.store_id)) slCollapsed.set(store.store_id, idx >= 2);
+      return slCollapsed.get(store.store_id) ? renderCollapsedStoreRow(store) : renderStoreCard(store, idx === 0);
+    })
+    .join("");
 
-  for (const [, store] of byStore) {
-    const groupEl = document.createElement("div");
-    groupEl.className = "shopping-store-group";
-    let html = `<h3>${escapeHtml(store.name || "Store")}</h3>`;
-    if (store.address) {
-      html += `<a class="store-address-link" target="_blank" rel="noopener" href="${mapsLink(store.address)}">${escapeHtml(store.address)}</a>`;
+  container.innerHTML = `
+    ${renderListsSummaryBar(stores, listsData.total_items)}
+    <div class="sl-grid">${cards}</div>
+    <div id="print-area"></div>
+  `;
+}
+
+function renderListsSummaryBar(stores, totalItems) {
+  const tags = stores
+    .map((s) => `<span class="sl-store-tag">${escapeHtml(s.retailer_name)} #${escapeHtml(s.retailer_store_id)} · ${s.counts.total}</span>`)
+    .join("");
+  return `
+    <div class="sl-summary-bar">
+      <div class="sl-summary-left">
+        <span class="sl-summary-count">${stores.length} STORE LIST${stores.length === 1 ? "" : "S"} · ${totalItems} ITEM${totalItems === 1 ? "" : "S"}</span>
+        <div class="sl-store-tags">${tags}</div>
+      </div>
+      <div class="sl-summary-right">
+        <button type="button" id="sl-email-all-btn" class="dv-btn dv-btn-outline">Email all ${stores.length} list${stores.length === 1 ? "" : "s"}</button>
+        <span class="sl-merge-note">Lists never merge — each is a separate trip.</span>
+      </div>
+    </div>
+  `;
+}
+
+// Store hours were dropped entirely (see AGENT_BRIEF/task report) -- nothing
+// populates store.hours (Home Depot's storeSearch query has no hours field),
+// and it was about to become dead schema on the live database. Distance is
+// the one location signal /api/lists actually returns, so that's all the
+// store card / walking-view headers show; the wireframe's "24 min away" is a
+// drive-time estimate we have no data for.
+function distanceSegment(store) {
+  return store.distance_miles != null ? `${store.distance_miles.toFixed(1)} mi away` : null;
+}
+
+function clockTime(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const suffix = h >= 12 ? "p" : "a";
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, "0")}${suffix}`;
+}
+
+function storeCaps(store) {
+  return `${escapeHtml(store.retailer_name || "").toUpperCase()} · ${escapeHtml(store.store_name || "").toUpperCase()} #${escapeHtml(store.retailer_store_id || "")}`;
+}
+
+function itemSubtitle(item, aisleUnknown) {
+  const segs = [];
+  if (aisleUnknown) {
+    segs.push("no aisle from site · ask an associate");
+  } else if (item.bay) {
+    segs.push(`Bay ${escapeHtml(item.bay)}`);
+  }
+  if (item.state === "purchased") {
+    segs.push(`found &amp; purchased ${clockTime(item.purchased_at)}`);
+  } else if (item.state === "cant_find") {
+    segs.push(`marked <strong>can't find</strong>`);
+    segs.push("kept for next trip");
+  } else {
+    const st = stockText(item);
+    if (st) segs.push(st);
+    if (item.sku) segs.push(`SKU ${escapeHtml(item.sku)}`);
+  }
+  return segs.join(" · ");
+}
+
+function slThumb(item) {
+  if (item.state === "cant_find") return `<div class="sl-thumb sl-thumb-dashed"></div>`;
+  return item.image_url
+    ? `<img class="sl-thumb" src="${item.image_url}" alt="">`
+    : `<div class="sl-thumb sl-thumb-placeholder"></div>`;
+}
+
+function renderListItemRow(item, aisleUnknown) {
+  const rowClass = ["sl-item-row"];
+  if (item.state === "purchased") rowClass.push("sl-item-purchased");
+  if (item.state === "cant_find") rowClass.push("sl-item-cantfind");
+  return `
+    <div class="${rowClass.join(" ")}">
+      <input type="checkbox" class="sl-item-checkbox" data-deal="${item.deal_id}" ${item.state === "purchased" ? "checked" : ""} aria-label="Mark ${escapeHtml(item.product_name)} purchased">
+      ${slThumb(item)}
+      <div class="sl-item-body">
+        <div class="sl-item-name">${escapeHtml(item.product_name)}</div>
+        <div class="sl-item-sub">${itemSubtitle(item, aisleUnknown)}</div>
+      </div>
+      <div class="sl-item-price">
+        ${money(item.price_cents)}
+        ${item.quantity ? `<div class="sl-item-qty">×${item.quantity}</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderAisleGroup(group) {
+  const aisleUnknown = group.aisle == null;
+  const label = aisleUnknown ? "AISLE UNKNOWN" : `AISLE ${escapeHtml(group.aisle)}`;
+  return `
+    <div class="sl-aisle-header">${label} · ${group.items.length} ITEM${group.items.length === 1 ? "" : "S"}</div>
+    ${group.items.map((item) => renderListItemRow(item, aisleUnknown)).join("")}
+  `;
+}
+
+function footerStatusText(counts) {
+  if (counts.purchased === 0 && counts.cant_find === 0) return "Nothing picked up yet";
+  let text = `${counts.purchased} of ${counts.total} picked up`;
+  if (counts.cant_find > 0) text += ` · ${counts.cant_find} not found`;
+  return text;
+}
+
+function renderStoreCard(store, isFirst) {
+  const distanceLine = distanceSegment(store);
+  return `
+    <div class="sl-card" data-store="${store.store_id}">
+      <div class="sl-card-header">
+        <div class="sl-card-title">${storeCaps(store)}</div>
+        <div class="sl-card-count">${store.counts.total} item${store.counts.total === 1 ? "" : "s"}</div>
+      </div>
+      ${store.address ? `<div class="sl-card-address">${escapeHtml(store.address)}</div>` : ""}
+      ${distanceLine ? `<div class="sl-card-distance">${distanceLine}</div>` : ""}
+      <div class="sl-card-actions">
+        ${store.address ? `<a class="dv-btn dv-btn-outline" target="_blank" rel="noopener" href="${mapsLink(store.address)}">Directions ↗</a>` : ""}
+        <button type="button" class="dv-btn dv-btn-outline sl-walk-btn" data-store="${store.store_id}">Open walking view</button>
+        <button type="button" class="dv-btn sl-btn-primary sl-email-btn" data-store="${store.store_id}">Email this list</button>
+        <button type="button" class="dv-btn dv-btn-outline sl-print-btn" data-store="${store.store_id}">Print</button>
+      </div>
+      ${isFirst ? `<p class="sl-email-note">Email includes aisle/bay, prices, SKUs and the directions link — readable with no signal in the store. (Item photos aren't included in the email.)</p>` : ""}
+      <div class="sl-aisle-groups">
+        ${store.aisle_groups.map(renderAisleGroup).join("")}
+      </div>
+      <div class="sl-card-footer">
+        <span class="sl-footer-status">${footerStatusText(store.counts)}</span>
+        ${store.counts.purchased > 0 ? `<button type="button" class="sl-clear-btn" data-store="${store.store_id}">Clear finished</button>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderCollapsedStoreRow(store) {
+  const distance = distanceSegment(store);
+  return `
+    <div class="sl-collapsed-row" data-store="${store.store_id}">
+      <div class="sl-collapsed-name">${storeCaps(store)}</div>
+      <div class="sl-collapsed-meta">
+        ${store.counts.total} item${store.counts.total === 1 ? "" : "s"}
+        ${store.address ? ` · ${escapeHtml(store.address)}` : ""}
+        ${distance ? ` · ${distance}` : ""}
+      </div>
+      <div class="sl-collapsed-actions">
+        <button type="button" class="dv-btn sl-btn-primary sl-email-btn" data-store="${store.store_id}">Email this list</button>
+        <button type="button" class="dv-btn dv-btn-outline sl-expand-btn" data-store="${store.store_id}">Expand</button>
+      </div>
+    </div>
+  `;
+}
+
+function findItemByDeal(dealId) {
+  for (const store of listsData?.stores || []) {
+    for (const group of store.aisle_groups) {
+      const found = group.items.find((i) => i.deal_id === dealId);
+      if (found) return found;
     }
-    for (const [section, items] of store.sections) {
-      html += `<div class="shopping-section"><h4>${escapeHtml(section)}</h4>`;
-      for (const item of items) {
-        const aisleText = item.aisle ? `Aisle ${escapeHtml(item.aisle)}${item.bay ? "/" + escapeHtml(item.bay) : ""}` : "";
-        html += `
-          <div class="shopping-item">
-            ${item.image_url ? `<img class="thumb" src="${item.image_url}" alt="">` : ""}
-            <div class="name">
-              ${escapeHtml(item.product_name)}
-              ${aisleText ? `<div class="product-dept">${aisleText}</div>` : ""}
-              ${item.canonical_url ? `<a class="store-address-link" target="_blank" rel="noopener" href="${productLink(item.canonical_url, item.retailer_store_id)}">View item &rarr;</a>` : ""}
-            </div>
-            <div class="price">${money(item.price_cents)}</div>
-            <button class="secondary shopping-bought-btn" data-deal="${item.deal_id}">Bought</button>
-            <button class="secondary shopping-remove-btn" data-deal="${item.deal_id}">Remove</button>
+  }
+  return null;
+}
+
+// --- Email (mailto:) -- decided by the user: client-built mailto link, no
+// backend send (see AGENT_BRIEF.md's "decisions already made"). Plain text,
+// one section per aisle in walking order, maps URL as a visible link.
+// Photos can't be inlined in a mailto body -- accepted, called out in the
+// on-page note (renderStoreCard's isFirst branch) instead of silently
+// promising something we don't deliver.
+function storeEmailBody(store) {
+  const lines = [];
+  lines.push(`${store.retailer_name} · ${store.store_name} #${store.retailer_store_id}`);
+  if (store.address) lines.push(store.address);
+  if (store.address) lines.push(`Directions: ${mapsLink(store.address)}`);
+  lines.push("");
+  for (const group of store.aisle_groups) {
+    const label = group.aisle == null ? "AISLE UNKNOWN" : `AISLE ${group.aisle}`;
+    lines.push(`${label} (${group.items.length} item${group.items.length === 1 ? "" : "s"})`);
+    for (const item of group.items) {
+      const parts = [item.product_name];
+      if (item.bay) parts.push(`Bay ${item.bay}`);
+      parts.push(money(item.price_cents));
+      if (item.sku) parts.push(`SKU ${item.sku}`);
+      if (item.stock_quantity != null) parts.push(`${item.stock_quantity} left`);
+      if (item.quantity) parts.push(`qty ×${item.quantity}`);
+      if (item.state === "purchased") parts.push(`purchased${item.purchased_at ? " " + clockTime(item.purchased_at) : ""}`);
+      if (item.state === "cant_find") parts.push(`can't find${item.cant_find_reason ? " — " + item.cant_find_reason : ""}`);
+      lines.push(`  - ${parts.join(" · ")}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+function emailStoreList(storeId) {
+  const store = listsData.stores.find((s) => s.store_id === storeId);
+  if (!store) return;
+  const subject = `${store.retailer_name} #${store.retailer_store_id} shopping list (${store.counts.total} items)`;
+  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(storeEmailBody(store))}`;
+}
+
+// "Email all N lists" -- one mail with clearly-sectioned store blocks,
+// rather than firing N separate mailto: navigations. Browsers/mail clients
+// don't reliably let a page open several mailto: drafts from one click (the
+// 2nd+ navigation is commonly blocked as a popup or just clobbers the 1st),
+// so N-separate-emails isn't achievably "one clearly-sectioned mail" either
+// way -- a single email keeps the one-tap action predictable.
+function emailAllLists() {
+  const stores = listsData.stores;
+  if (stores.length === 0) return;
+  const subject = `${stores.length} store shopping lists (${listsData.total_items} items)`;
+  const body = stores
+    .map((s) => `===== ${s.retailer_name} · ${s.store_name} #${s.retailer_store_id} =====\n\n${storeEmailBody(s)}`)
+    .join("\n");
+  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// --- Print -- "same aisle-ordered content as the email" (handoff). Renders
+// into #print-area (inside #tab-shopping, appended by renderShoppingLists)
+// and a print-only stylesheet (style.css, bottom) hides everything else via
+// a body.printing-list toggle -- the no-build/no-framework equivalent of a
+// dedicated print view.
+function buildPrintHtml(store) {
+  const groups = store.aisle_groups
+    .map((group) => {
+      const label = group.aisle == null ? "AISLE UNKNOWN" : `AISLE ${escapeHtml(group.aisle)}`;
+      const items = group.items
+        .map((item) => {
+          const parts = [escapeHtml(item.product_name)];
+          if (item.bay) parts.push(`Bay ${escapeHtml(item.bay)}`);
+          parts.push(money(item.price_cents));
+          if (item.sku) parts.push(`SKU ${escapeHtml(item.sku)}`);
+          if (item.stock_quantity != null) parts.push(`${item.stock_quantity} left`);
+          if (item.quantity) parts.push(`×${item.quantity}`);
+          if (item.state === "purchased") parts.push(`purchased${item.purchased_at ? " " + clockTime(item.purchased_at) : ""}`);
+          if (item.state === "cant_find") parts.push(`can't find${item.cant_find_reason ? ": " + escapeHtml(item.cant_find_reason) : ""}`);
+          return `<li>${parts.join(" · ")}</li>`;
+        })
+        .join("");
+      return `<h3>${label} · ${group.items.length} ITEM${group.items.length === 1 ? "" : "S"}</h3><ul>${items}</ul>`;
+    })
+    .join("");
+  return `
+    <h1>${storeCaps(store)}</h1>
+    ${store.address ? `<p>${escapeHtml(store.address)}</p>` : ""}
+    ${store.address ? `<p>Directions: ${mapsLink(store.address)}</p>` : ""}
+    ${groups}
+  `;
+}
+
+function printStoreList(storeId) {
+  const store = listsData.stores.find((s) => s.store_id === storeId);
+  if (!store) return;
+  const area = $("#print-area");
+  if (!area) return;
+  area.innerHTML = buildPrintHtml(store);
+  document.body.classList.add("printing-list");
+  window.print();
+}
+
+function setupShoppingTab() {
+  // One-time delegated listeners on the tab panel -- renderShoppingLists()
+  // replaces #shopping-list-content's innerHTML on every refresh, but the
+  // panel element itself (the listener target) never gets swapped out.
+  const panel = $("#tab-shopping");
+
+  panel.addEventListener("click", async (ev) => {
+    const expandBtn = ev.target.closest(".sl-expand-btn");
+    if (expandBtn) {
+      slCollapsed.set(Number(expandBtn.dataset.store), false);
+      renderShoppingLists();
+      return;
+    }
+    const walkBtn = ev.target.closest(".sl-walk-btn");
+    if (walkBtn) {
+      openWalkingView(Number(walkBtn.dataset.store));
+      return;
+    }
+    const emailBtn = ev.target.closest(".sl-email-btn");
+    if (emailBtn) {
+      emailStoreList(Number(emailBtn.dataset.store));
+      return;
+    }
+    const emailAllBtn = ev.target.closest("#sl-email-all-btn");
+    if (emailAllBtn) {
+      emailAllLists();
+      return;
+    }
+    const printBtn = ev.target.closest(".sl-print-btn");
+    if (printBtn) {
+      printStoreList(Number(printBtn.dataset.store));
+      return;
+    }
+    const clearBtn = ev.target.closest(".sl-clear-btn");
+    if (clearBtn) {
+      await api(`/api/lists/store/${clearBtn.dataset.store}/clear-finished`, { method: "POST" });
+      await loadShoppingList();
+    }
+  });
+
+  panel.addEventListener("change", async (ev) => {
+    const cb = ev.target.closest(".sl-item-checkbox");
+    if (!cb) return;
+    const dealId = Number(cb.dataset.deal);
+    const item = findItemByDeal(dealId);
+    if (!item) return;
+    // Toggle: open -> purchased; anything already resolved (purchased or
+    // cant_find) -> reopen (undo) rather than re-marking purchased, so the
+    // one checkbox works for both directions.
+    if (item.state === "open") {
+      await api(`/api/lists/items/${dealId}/purchased`, { method: "POST" });
+    } else {
+      await api(`/api/lists/items/${dealId}/reopen`, { method: "POST" });
+    }
+    await loadShoppingList();
+  });
+
+  window.addEventListener("afterprint", () => document.body.classList.remove("printing-list"));
+}
+
+// --- Screen 3b: mobile walking view -----------------------------------
+// Reached from a store card's "Open walking view" -- lives in #walking-view,
+// a fixed full-viewport overlay outside <main> (see index.html) so it isn't
+// subject to the tab-panel show/hide machinery (it isn't a tab). Built at a
+// 390px intrinsic width per the wireframe; a later responsive/media-query
+// pass integrates it into the rest of the app's breakpoints.
+let wvState = null; // { storeId, skipped: Set<dealId>, undoStack: [dealId], aisleUnknownExpanded }
+
+function currentWvStore() {
+  if (!wvState) return null;
+  return listsData?.stores.find((s) => s.store_id === wvState.storeId) || null;
+}
+
+// "The next unresolved item" (handoff) in aisle order. `skipped` is
+// client-only state (State management's "in-flight swipe offset"-style
+// client bucket, nothing to persist) -- Skip has no backend endpoint, it
+// just deprioritizes an item for the rest of this walking-view session so
+// the promoted card moves on without resolving anything.
+function pickPromotedItem(store) {
+  const flat = [];
+  for (const g of store.aisle_groups) for (const item of g.items) flat.push(item);
+  const unresolved = flat.filter((i) => i.state === "open");
+  if (unresolved.length === 0) return null;
+  let candidates = unresolved.filter((i) => !wvState.skipped.has(i.deal_id));
+  if (candidates.length === 0) {
+    wvState.skipped.clear();
+    candidates = unresolved;
+  }
+  return candidates[0];
+}
+
+// "Why it was flagged" (required in-aisle per the handoff), backed by the
+// real fields now -- store_lists (web/backend/queries.py) selects
+// deal.deal_kind and the latest observation's is_clearance/is_penny. Only
+// states the data can actually support: no Home-Depot-specific tag
+// language ("yellow-tag") the data doesn't carry, and nothing at all when
+// none of the flags are set (an empty meta segment beats a guess).
+function flagReasonText(item) {
+  if (item.deal_kind === "penny" || item.is_penny) return "penny item";
+  if (item.deal_kind === "upcoming_clearance") return "flagged as upcoming clearance";
+  if (item.is_clearance) return "clearance";
+  return "";
+}
+
+function wvThumb(item, sizeClass) {
+  if (item.image_url) return `<img class="${sizeClass}" src="${item.image_url}" alt="">`;
+  return `<div class="${sizeClass} wv-thumb-placeholder"></div>`;
+}
+
+function renderPromotedCard(item) {
+  const flagReason = flagReasonText(item);
+  const meta = [stockText(item), flagReason].filter(Boolean).join(" · ");
+  return `
+    <div class="wv-current-aisle-header">AISLE ${item.aisle ? escapeHtml(item.aisle) : "UNKNOWN"}${item.bay ? " · BAY " + escapeHtml(item.bay) : ""}</div>
+    <div class="wv-current-card">
+      <div class="wv-current-top">
+        ${wvThumb(item, "wv-current-photo")}
+        <div class="wv-current-info">
+          <div class="wv-current-name">${escapeHtml(item.product_name)}</div>
+          <div class="wv-current-price-row">
+            <span class="wv-current-price">${money(item.price_cents)}</span>
+            ${item.discount_pct != null ? `<span class="wv-discount-tag">${item.discount_pct}% off</span>` : ""}
           </div>
-        `;
-      }
-      html += `</div>`;
-    }
-    groupEl.innerHTML = html;
-    container.appendChild(groupEl);
-  }
+          ${meta ? `<div class="wv-current-meta">${meta}</div>` : ""}
+          ${item.sku ? `<div class="wv-current-sku">SKU ${escapeHtml(item.sku)}</div>` : ""}
+        </div>
+      </div>
+      <div class="wv-action-row">
+        <button type="button" class="wv-found-btn" data-deal="${item.deal_id}">Found it</button>
+        <button type="button" class="wv-cantfind-btn" data-deal="${item.deal_id}">Can't find</button>
+        <button type="button" class="wv-skip-btn" data-deal="${item.deal_id}">Skip</button>
+      </div>
+    </div>
+  `;
+}
 
-  container.querySelectorAll(".shopping-bought-btn").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/api/deals/${btn.dataset.deal}/bought`, { method: "POST" });
-      loadShoppingList();
-    })
-  );
-  container.querySelectorAll(".shopping-remove-btn").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/api/deals/${btn.dataset.deal}/dismiss`, { method: "POST" });
-      loadShoppingList();
-    })
-  );
+function renderCompactRow(item) {
+  if (item.state === "purchased") {
+    return `
+      <div class="wv-row wv-row-purchased">
+        ${wvThumb(item, "wv-thumb")}
+        <div class="wv-row-body">
+          <div class="wv-row-name">${escapeHtml(item.product_name)}</div>
+          <div class="wv-row-sub">purchased${item.purchased_at ? ` ${clockTime(item.purchased_at)}` : ""} · ${money(item.price_cents)}</div>
+        </div>
+      </div>
+    `;
+  }
+  if (item.state === "cant_find") {
+    const reasonLabel = item.cant_find_reason ? `reason: ${escapeHtml(item.cant_find_reason)}` : "reason";
+    return `
+      <div class="wv-row wv-row-cantfind">
+        <div class="wv-thumb wv-thumb-dashed"></div>
+        <div class="wv-row-body">
+          <div class="wv-row-name">${escapeHtml(item.product_name)}</div>
+          <div class="wv-row-sub">${item.bay ? `Bay ${escapeHtml(item.bay)} · ` : ""}can't find · <a href="#" class="wv-reason-link" data-deal="${item.deal_id}">${reasonLabel}</a></div>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="wv-row">
+      ${wvThumb(item, "wv-thumb")}
+      <div class="wv-row-body">
+        <div class="wv-row-name">${escapeHtml(item.product_name)}</div>
+        <div class="wv-row-sub">${item.bay ? `Bay ${escapeHtml(item.bay)} · ` : ""}${money(item.price_cents)}${item.quantity ? ` · ×${item.quantity}` : ""}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderWvAisleGroup(group, excludeDealId) {
+  const items = group.items.filter((i) => i.deal_id !== excludeDealId);
+  if (items.length === 0) return "";
+  if (group.aisle == null) {
+    if (!wvState.aisleUnknownExpanded) {
+      return `<div class="wv-aisle-unknown-row" id="wv-aisle-unknown-toggle">Aisle unknown · ${items.length} item${items.length === 1 ? "" : "s"} ▸</div>`;
+    }
+    return `
+      <div class="wv-aisle-unknown-row expanded" id="wv-aisle-unknown-toggle">Aisle unknown · ${items.length} item${items.length === 1 ? "" : "s"} ▾</div>
+      ${items.map(renderCompactRow).join("")}
+    `;
+  }
+  return `
+    <div class="wv-aisle-header">AISLE ${escapeHtml(group.aisle)} · ${items.length} ITEM${items.length === 1 ? "" : "S"}</div>
+    ${items.map(renderCompactRow).join("")}
+  `;
+}
+
+function renderWalkingView() {
+  const store = currentWvStore();
+  if (!store) {
+    closeWalkingView();
+    return;
+  }
+  const promoted = pickPromotedItem(store);
+  const counts = store.counts;
+  const progressPct = counts.total ? Math.round(((counts.total - counts.open) / counts.total) * 100) : 0;
+  const distance = distanceSegment(store);
+
+  const body = [
+    promoted ? renderPromotedCard(promoted) : `<p class="wv-all-done">Everything's resolved — nice work.</p>`,
+    store.aisle_groups.map((g) => renderWvAisleGroup(g, promoted?.deal_id)).join(""),
+  ].join("");
+
+  $("#walking-view .wv-panel").innerHTML = `
+    <div class="wv-header">
+      <div class="wv-top-row">
+        <a href="#" class="wv-back">‹ Lists</a>
+        <span class="wv-left-count">${counts.open} of ${counts.total} left</span>
+      </div>
+      <div class="wv-store-name">
+        <div>${escapeHtml((store.retailer_name || "").toUpperCase())}</div>
+        <div>${escapeHtml((store.store_name || "").toUpperCase())} #${escapeHtml(store.retailer_store_id || "")}</div>
+      </div>
+      <div class="wv-address-line">
+        ${escapeHtml(store.address || "")}${distance ? ` · ${distance}` : ""}${store.address ? ` · <a class="wv-directions" target="_blank" rel="noopener" href="${mapsLink(store.address)}">Directions ↗</a>` : ""}
+      </div>
+      <div class="wv-progress"><div class="wv-progress-fill" style="width:${progressPct}%"></div></div>
+    </div>
+    <div class="wv-body">${body}</div>
+    <div class="wv-bottom-bar">
+      <button type="button" class="wv-no-longer-need" ${promoted ? "" : "disabled"}>No longer need</button>
+      <button type="button" class="wv-undo" ${wvState.undoStack.length ? "" : "disabled"}>Undo</button>
+      <span class="wv-purchased-count">${counts.purchased} purchased</span>
+    </div>
+  `;
+}
+
+function openWalkingView(storeId) {
+  wvState = { storeId, skipped: new Set(), undoStack: [], aisleUnknownExpanded: false };
+  renderWalkingView();
+  $("#walking-view").hidden = false;
+}
+
+function closeWalkingView() {
+  $("#walking-view").hidden = true;
+  wvState = null;
+  // The grid may be stale if actions were taken in the walking view --
+  // cheap enough to just refetch on the way back rather than track a dirty
+  // flag through every mutating handler below.
+  if ($(".tab-btn.active")?.dataset.tab === "shopping") loadShoppingList();
+}
+
+async function refreshListsData() {
+  listsData = await api("/api/lists");
+}
+
+// Found it / Can't find (primary tap, no reason prompt -- see the reason
+// link below for where a reason gets attached after the fact, per the
+// handoff's explicit requirement that the fast in-aisle tap must work with
+// no reason at all).
+async function resolveWvItem(dealId, kind) {
+  if (kind === "purchased") {
+    await api(`/api/lists/items/${dealId}/purchased`, { method: "POST" });
+  } else {
+    await api(`/api/lists/items/${dealId}/cant-find`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: null }),
+    });
+  }
+  wvState.undoStack.push(dealId);
+  wvState.skipped.delete(dealId);
+  await refreshListsData();
+  renderWalkingView();
+}
+
+function setupWalkingView() {
+  const el = $("#walking-view");
+
+  el.addEventListener("click", async (ev) => {
+    if (ev.target.closest(".wv-back")) {
+      ev.preventDefault();
+      closeWalkingView();
+      return;
+    }
+    if (ev.target.closest(".wv-directions")) return; // real navigation, let it through
+
+    const foundBtn = ev.target.closest(".wv-found-btn");
+    if (foundBtn) return resolveWvItem(Number(foundBtn.dataset.deal), "purchased");
+
+    const cantFindBtn = ev.target.closest(".wv-cantfind-btn");
+    if (cantFindBtn) return resolveWvItem(Number(cantFindBtn.dataset.deal), "cant_find");
+
+    const skipBtn = ev.target.closest(".wv-skip-btn");
+    if (skipBtn) {
+      wvState.skipped.add(Number(skipBtn.dataset.deal));
+      renderWalkingView();
+      return;
+    }
+
+    // Not-drawn-in-the-wireframe decision (handoff explicitly flags the
+    // can't-find reason sheet as "needs design or a developer decision"):
+    // a plain text prompt, matching the existing share-link prompt() at
+    // app.js:466 rather than inventing an un-approved polished enum sheet.
+    const reasonLink = ev.target.closest(".wv-reason-link");
+    if (reasonLink) {
+      ev.preventDefault();
+      const dealId = Number(reasonLink.dataset.deal);
+      const item = findItemByDeal(dealId);
+      const reason = window.prompt("Reason it couldn't be found (optional):", item?.cant_find_reason || "");
+      if (reason !== null) {
+        await api(`/api/lists/items/${dealId}/cant-find`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: reason.trim() || null }),
+        });
+        await refreshListsData();
+        renderWalkingView();
+      }
+      return;
+    }
+
+    if (ev.target.closest("#wv-aisle-unknown-toggle")) {
+      wvState.aisleUnknownExpanded = !wvState.aisleUnknownExpanded;
+      renderWalkingView();
+      return;
+    }
+
+    // "No longer need" applies to the item currently promoted into the
+    // large card -- the walking view only ever has one item "in focus," so
+    // that's the natural target for a bottom-bar action not tied to a
+    // specific row (not spelled out by the wireframe -- flagged in report).
+    const noLongerBtn = ev.target.closest(".wv-no-longer-need");
+    if (noLongerBtn && !noLongerBtn.disabled) {
+      const promoted = pickPromotedItem(currentWvStore());
+      if (promoted) {
+        await api(`/api/lists/items/${promoted.deal_id}/no-longer-needed`, { method: "POST" });
+        wvState.undoStack.push(promoted.deal_id);
+        await refreshListsData();
+        renderWalkingView();
+      }
+      return;
+    }
+
+    const undoBtn = ev.target.closest(".wv-undo");
+    if (undoBtn && !undoBtn.disabled) {
+      const dealId = wvState.undoStack.pop();
+      if (dealId != null) {
+        await api(`/api/lists/items/${dealId}/reopen`, { method: "POST" });
+        await refreshListsData();
+        renderWalkingView();
+      }
+    }
+  });
 }
 
 async function loadHistory() {
@@ -789,11 +1530,11 @@ async function openDeal(dealId) {
     closeModal();
     refreshActiveTab();
   });
-  $("#deal-modal").classList.remove("hidden");
+  $("#deal-modal").hidden = false;
 }
 
 function closeModal() {
-  $("#deal-modal").classList.add("hidden");
+  $("#deal-modal").hidden = true;
 }
 
 // --- Deals page scope: retailer / store / department tree, synced to the
@@ -834,9 +1575,19 @@ function saveScopeToUrl() {
 
 const STATUS_PARAMS = {
   active: ["new", "active"],
+  watching: ["new", "active"],
   waiting: ["deferred"],
   all: ["new", "active", "deferred"],
 };
+
+// See loadDeals's call site -- deal_kind='upcoming_clearance' rows are
+// carved out of "active" and into "watching" client-side, since both tabs
+// fetch the same status=['new','active'] set from the backend.
+function filterByDealKind(rows, statusFilter) {
+  if (statusFilter === "active") return rows.filter((d) => d.deal_kind !== "upcoming_clearance");
+  if (statusFilter === "watching") return rows.filter((d) => d.deal_kind === "upcoming_clearance");
+  return rows;
+}
 
 function retailerExpandKey(slug) { return `deals_retailer_expanded_${slug}`; }
 function deptExpandKey(name) { return `deals_dept_expanded_${name}`; }
@@ -900,7 +1651,7 @@ function selectRetailer(slug) {
   scope.departmentName = null;
   saveScopeToUrl();
   loadTree();
-  loadDeals();
+  loadDeals({ resetWindow: true });
 }
 
 function selectStore(slug, storeId) {
@@ -908,7 +1659,7 @@ function selectStore(slug, storeId) {
   scope.storeId = storeId;
   saveScopeToUrl();
   loadTree();
-  loadDeals();
+  loadDeals({ resetWindow: true });
 }
 
 function renderDepartmentTree(departments) {
@@ -968,7 +1719,7 @@ function selectDepartment(d) {
   scope.departmentName = d.name;
   saveScopeToUrl();
   loadTree();
-  loadDeals();
+  loadDeals({ resetWindow: true });
 }
 
 function renderScopeBar() {
@@ -981,7 +1732,15 @@ function renderScopeBar() {
     parts.push("all stores");
   }
   let breadcrumb = parts.join(" \u00B7 ");
-  if (scope.departmentName) breadcrumb += ` / <strong>${escapeHtml(scope.departmentName)}</strong>`;
+  if (scope.departmentName) {
+    // department_name is the flattened space-joined breadcrumb (see
+    // build_department_hierarchy) -- split it back into segments the same
+    // way the deal row's subline does, rather than rendering it as one blob.
+    const deptLabels = departmentBreadcrumbLabels(scope.departmentName);
+    breadcrumb += " / " + deptLabels
+      .map((seg, i) => (i === deptLabels.length - 1 ? `<strong>${escapeHtml(seg)}</strong>` : escapeHtml(seg)))
+      .join(" / ");
+  }
   $("#scope-breadcrumb").innerHTML = breadcrumb;
 
   const toggle = $("#scope-descendants-toggle");
@@ -993,6 +1752,7 @@ function renderScopeBar() {
 function renderStatusBar(counts) {
   const tags = [
     { key: "active", label: `Active clearance ${counts.active}` },
+    { key: "watching", label: `Watching ${counts.watching}` },
     { key: "waiting", label: `Waiting for deeper cut ${counts.waiting}` },
     { key: "all", label: `All ${counts.all}` },
   ];
@@ -1005,7 +1765,7 @@ function renderStatusBar(counts) {
       scope.statusFilter = btn.dataset.status;
       saveScopeToUrl();
       renderStatusBar(counts);
-      loadDeals();
+      loadDeals({ resetWindow: true });
     })
   );
 }
@@ -1016,7 +1776,7 @@ function setupScopeBar() {
     saveScopeToUrl();
     renderScopeBar();
     loadTree();
-    loadDeals();
+    loadDeals({ resetWindow: true });
   });
   $("#dept-filter").addEventListener("input", () => renderDepartmentTree(window._departmentTree || []));
 }
@@ -1710,7 +2470,7 @@ async function openScanNowDialog() {
   document.querySelector("#deal-modal .modal-content").classList.add("scan-now-detail");
   const body = $("#modal-body");
   body.innerHTML = `<p class="meta">Loading stores…</p>`;
-  $("#deal-modal").classList.remove("hidden");
+  $("#deal-modal").hidden = false;
 
   const scope = await api("/api/scan/scope");
   window._scanNowSelected = new Set();
@@ -1724,47 +2484,183 @@ const SCAN_STATE_LABELS = {
   idle: "Idle",
   unreachable: "Scanner unreachable",
   unknown: "Unknown",
+  needs_login: "Needs login",
 };
+
+// Header wireframe 5b gives "idle" and "scanning" their own dedicated UI
+// (the quiet running total, and the row-2 status bar) -- the old
+// always-visible badge would be redundant noise in both. It only needs to
+// resurface for the states neither of those covers: still starting up, or
+// something's actually wrong.
+const SCAN_BADGE_STATES = new Set(["starting", "unreachable", "unknown", "needs_login"]);
+
+function formatDuration(seconds) {
+  if (seconds == null) return null;
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const mins = Math.round(s / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+function formatEta(etaSeconds) {
+  if (etaSeconds == null) return null;
+  const mins = Math.round(etaSeconds / 60);
+  return mins < 1 ? "<1 min left" : `~${mins} min left`;
+}
+
+// Keyed by a caller-chosen id (not the element) because the status bar
+// that holds the big odometer gets its innerHTML fully rebuilt on every
+// poll (see renderScanStatusBar) -- a DOM-attribute-based "previous
+// value" would be wiped out the instant its element is recreated, right
+// when the rollover highlight matters most (mid-scan, every 2-3s).
+const _odometerPrevValues = {};
+
+// Mechanical digit-counter odometer (header wireframe 5b): one bordered
+// cell per digit, tabular numerals via CSS (see style.css's .odometer
+// rules). Digits that changed since the last render get the accent
+// "just rolled over" highlight, diffed right-aligned (least-significant
+// digit first) so a value that grows a new leading digit doesn't
+// misalign the comparison.
+function renderOdometer(el, value, key) {
+  if (!el || value == null) return;
+  const digits = String(value).split("");
+  const prevStr = _odometerPrevValues[key];
+  const prevDigits = prevStr ? prevStr.split("") : [];
+  const offset = digits.length - prevDigits.length;
+  el.innerHTML = digits
+    .map((d, i) => {
+      const prevIdx = i - offset;
+      const rolled = prevDigits.length > 0 && prevIdx >= 0 && prevDigits[prevIdx] !== d;
+      // A gap every 3 digits from the right -- mechanical odometers don't
+      // print commas, but a 7-digit total is unreadable with none at all.
+      const fromRight = digits.length - i;
+      const grouped = fromRight > 1 && fromRight % 3 === 1;
+      return `<span class="odometer-digit${rolled ? " rolled" : ""}${grouped ? " odometer-group-gap" : ""}">${d}</span>`;
+    })
+    .join("");
+  _odometerPrevValues[key] = String(value);
+}
 
 async function refreshScanStatus() {
   const status = await api("/api/scan/status");
-  const badge = $("#scan-state-badge");
   const state = status.scanner.state || "unknown";
-  badge.textContent = SCAN_STATE_LABELS[state] || state;
-  badge.title = state === "idle"
-    ? "Not currently scanning — \"Scan now\" will start one immediately."
-    : "A scan is in progress — \"Scan now\" is disabled until it finishes.";
-  badge.className = `badge ${state}`;
+  const scanInProgress = state === "scanning" || state === "starting";
+
+  const badge = $("#scan-state-badge");
+  badge.hidden = !SCAN_BADGE_STATES.has(state);
+  if (!badge.hidden) {
+    badge.textContent = SCAN_STATE_LABELS[state] || state;
+    badge.className = `badge ${state}`;
+  }
 
   // Disabled while a scan is already running so it's never ambiguous
   // whether clicking does anything -- confirmed source of confusion
   // 2026-08-31 (the button was always clickable regardless of state).
   const btn = $("#scan-now-btn");
-  const scanInProgress = state === "scanning" || state === "starting";
   btn.disabled = scanInProgress;
   btn.textContent = scanInProgress ? "Scanning…" : "Scan now";
 
-  // Live checkpoint progress (see orchestrator.py's on_progress) -- "what
-  // is it actually doing right now", not just a state word. Confirmed
-  // real friction this session: this used to require reading logs or the
-  // DB by hand to answer.
-  const detail = $("#scan-progress-detail");
-  const p = status.scanner.progress;
-  if (!scanInProgress || !p || !p.phase) {
-    detail.hidden = true;
-  } else {
-    const parts = [];
-    if (p.store) parts.push(`Store ${p.store_index || "?"}/${p.stores_total || "?"} (${p.store})`);
-    if (p.department) {
-      const deptProgress = p.department_products_total
-        ? `${p.department_products_checked || 0}/${p.department_products_total}`
-        : "…";
-      parts.push(`Dept ${p.department_index || "?"}/${p.departments_total || "?"} "${p.department}" ${deptProgress}`);
-    }
-    if (p.errors_count) parts.push(`${p.errors_count} error(s)`);
-    detail.textContent = parts.join(" · ") || "Starting…";
-    detail.hidden = parts.length === 0;
+  renderScanIdleSummary(state, status);
+  renderScanStatusBar(state, status);
+
+  // A ticking odometer and a responsive progress bar want a much tighter
+  // loop than the old 15s -- 2-3s while a scan is actually running, back
+  // off to the idle cadence otherwise so an open-but-idle tab isn't
+  // hammering /api/scan/status for nothing. Read by scheduleScanStatusPoll
+  // (see main()) for the *next* wait, not this one -- so the very next
+  // poll after a scan starts still lands quickly.
+  window._scanStatusPollDelay = state === "scanning" ? 2500 : 15000;
+}
+
+function renderScanIdleSummary(state, status) {
+  const wrap = $("#scan-idle-summary");
+  const total = status.price_checks?.total;
+  if (state === "scanning" || total == null) {
+    wrap.hidden = true;
+    return;
   }
+  wrap.hidden = false;
+  const lastScan = status.scanner.last_scan_started_at;
+  $("#scan-idle-text").textContent = `${total.toLocaleString()} checks · last scan ${lastScan ? relTime(lastScan) : "never"}`;
+}
+
+function renderScanStatusBar(state, status) {
+  const bar = $("#scan-status-bar");
+  if (state !== "scanning") {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+
+  // _progress.clear() runs at the top of every scan (scanner/main.py's
+  // _scan_all) -- the first poll or two after "Scan now" can land before
+  // the first checkpoint fires, so every field below is treated as
+  // possibly absent rather than assuming phase/retailer are always set.
+  const p = status.scanner.progress || {};
+  const breadcrumb = [p.retailer, p.store, p.department].filter(Boolean).join(" › ");
+  const cancelling = !!status.scanner.cancel_requested;
+
+  const productParts = [];
+  if (p.department_products_total) {
+    productParts.push(`${p.department_products_checked || 0} of ${p.department_products_total} products`);
+  } else if (p.products_checked) {
+    productParts.push(`${p.products_checked} products checked`);
+  }
+  const eta = formatEta(status.scanner.eta_seconds);
+  if (eta) productParts.push(eta);
+  if (p.errors_count) productParts.push(`${p.errors_count} error(s)`);
+
+  const fraction = status.scanner.progress_fraction;
+  const lastMinute = status.price_checks?.last_minute ?? 0;
+
+  bar.innerHTML = `
+    <span class="scanbar-dot" aria-hidden="true"></span>
+    <span class="scanbar-label">${cancelling ? "Cancelling…" : "Scanning"}</span>
+    <span class="scanbar-breadcrumb">${escapeHtml(breadcrumb || "Starting…")}</span>
+    <div class="scanbar-progress-wrap">
+      <div class="scanbar-progress-text">${escapeHtml(productParts.join(" · ") || "Starting…")}</div>
+      <div class="scanbar-progress-track"><div class="scanbar-progress-fill" style="width: ${fraction != null ? Math.round(fraction * 100) : 0}%"></div></div>
+    </div>
+    <button id="scan-cancel-btn" class="scanbar-cancel-btn" type="button" ${cancelling ? "disabled" : ""}>${cancelling ? "Cancelling…" : "Cancel scan"}</button>
+    <div class="scanbar-divider" aria-hidden="true"></div>
+    <div class="scanbar-odometer">
+      <div class="scanbar-odometer-label">Total price checks performed</div>
+      <div id="scan-odometer-big" class="odometer odometer-big"></div>
+      <div class="scanbar-odometer-rate">+${lastMinute} in the last minute</div>
+    </div>
+  `;
+  renderOdometer($("#scan-odometer-big"), status.price_checks?.total, "big");
+
+  $("#scan-cancel-btn").addEventListener("click", async (ev) => {
+    ev.target.disabled = true;
+    ev.target.textContent = "Cancelling…";
+    // POST /api/scan/cancel is cooperative (scanner/orchestrator.py's
+    // ScanCancelled) -- it can take a checkpoint or two to actually wind
+    // down, hence the immediate optimistic "Cancelling…" rather than
+    // waiting for state to flip to idle.
+    await api("/api/scan/cancel", { method: "POST" }).catch(() => {});
+    refreshScanStatus();
+  });
+}
+
+// Recursive setTimeout, not setInterval -- refreshScanStatus adjusts
+// window._scanStatusPollDelay every call (fast while scanning, slow
+// idle), and a fixed setInterval can't change its own period. Wrapped in
+// try/catch so one failed request (backend restart, brief network blip)
+// doesn't silently kill polling for the rest of the session.
+function scheduleScanStatusPoll() {
+  clearTimeout(window._scanStatusPollTimer);
+  window._scanStatusPollTimer = setTimeout(async () => {
+    try {
+      await refreshScanStatus();
+    } catch (e) {
+      console.error("refreshScanStatus failed", e);
+    }
+    scheduleScanStatusPoll();
+  }, window._scanStatusPollDelay || 15000);
 }
 
 // noVNC's own client page, proxied same-origin through /vnc/* (see
@@ -1845,7 +2741,7 @@ function setupFiltersPopover() {
     $("#f-price-max").value = "";
     $("#f-in-stock").checked = false;
     updateFiltersCountBadge();
-    loadDeals();
+    loadDeals({ resetWindow: true });
   });
 }
 
@@ -1855,11 +2751,11 @@ function setupFilters() {
   // only wires the filter row above the deal list.
   setupFiltersPopover();
   ["#f-clearance", "#f-penny", "#f-min-discount", "#f-price-min", "#f-price-max", "#f-in-stock", "#f-sort"].forEach(
-    (sel) => $(sel).addEventListener("change", () => { updateFiltersCountBadge(); loadDeals(); })
+    (sel) => $(sel).addEventListener("change", () => { updateFiltersCountBadge(); loadDeals({ resetWindow: true }); })
   );
   $("#f-search").addEventListener("input", () => {
     clearTimeout(window._searchDebounce);
-    window._searchDebounce = setTimeout(loadDeals, 300);
+    window._searchDebounce = setTimeout(() => loadDeals({ resetWindow: true }), 300);
   });
 }
 
@@ -1867,13 +2763,20 @@ function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (ev) => {
     if ($(".tab-btn.active")?.dataset.tab !== "deals") return;
     if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
-    const rows = $$("#deal-list .deal-row");
+    let rows = $$("#deal-list .deal-row");
     if (!rows.length) return;
     let idx = rows.findIndex((r) => r.classList.contains("focused"));
 
     if (ev.key === "j" || ev.key === "k") {
       ev.preventDefault();
-      if (idx >= 0) rows[idx].classList.remove("focused");
+      // J past the last *rendered* row shouldn't dead-end at the window
+      // boundary -- pull in the next page first (a no-op once everything
+      // fetched is already on screen) and re-query before moving focus.
+      if (ev.key === "j" && idx === rows.length - 1) {
+        extendDealWindow();
+        rows = $$("#deal-list .deal-row");
+      }
+      rows.forEach((r) => r.classList.remove("focused"));
       idx = ev.key === "j" ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0);
       rows[idx].classList.add("focused");
       rows[idx].scrollIntoView({ block: "nearest" });
@@ -1890,6 +2793,8 @@ async function main() {
   setupFilters();
   setupScopeBar();
   setupKeyboardShortcuts();
+  setupShoppingTab();
+  setupWalkingView();
   $("#modal-close").addEventListener("click", closeModal);
   $("#scan-now-btn").addEventListener("click", () => openScanNowDialog());
 
@@ -1910,7 +2815,7 @@ async function main() {
     openProductDetail(sharedProductId);
   }
 
-  setInterval(refreshScanStatus, 15000);
+  scheduleScanStatusPoll();
   setInterval(() => {
     if ($(".tab-btn.active").dataset.tab === "deals") loadDeals();
   }, 60000);

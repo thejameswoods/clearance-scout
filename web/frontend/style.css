@@ -1,24 +1,81 @@
 :root {
-  --bg: #f7f7f5;
+  /* One design system, not two. Through 2026-09-01 this file carried the
+     app's original palette (--accent: #e56a1f, "Home Depot orange, close
+     enough") side by side with a second, complete "design-v2 Industry"
+     palette (--dv-*: steel-blue accent, Barlow/Barlow Condensed, monospace
+     labels) introduced for the Deals-tab rewrite and extended tab by tab
+     from there. Nothing ever retired the first system, so whichever tab a
+     given screen belonged to determined which palette it rendered in --
+     the topbar, nav tabs, badges, every plain <button>, History, Browser,
+     Logs and Settings stayed on the orange system while Deals/Lists/the
+     item-detail overlay/the walking view moved to steel blue on the same
+     screen (confirmed live 2026-09-02 -- orange "Scanning..." pill next to
+     a steel-blue status bar). Fixed by making the base tokens ARE the
+     design-v2 values; --dv-* stays defined as aliases so the large amount
+     of already-written --dv-* CSS below keeps working unchanged. */
+  --bg: #f2f2f3;
   --card-bg: #ffffff;
-  --border: #e2e2df;
-  --text: #1f2320;
-  --text-dim: #6b6f6c;
-  --accent: #e56a1f;   /* Home Depot orange, close enough */
+  --border: #dcdcdc;
+  --text: #1d1f20;
+  --text-dim: #6b6f72;
+  --accent: #5980a6;
+  --accent-dark: #45657f;
+  --accent-tint: #eaf0f5;
   --green: #1f8a4c;
   --yellow: #b8860b;
   --danger: #c0392b;
-  --radius: 10px;
+  --radius: 4px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-condensed: "Barlow Condensed", sans-serif;
+  --font-body: "Barlow", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* Aliases for the pre-existing design-v2-scoped rules (search --dv- in
+     this file) -- same values as above, kept under their original names
+     rather than rewriting every rule that already reads them correctly. */
+  --dv-accent: var(--accent);
+  --dv-accent-dark: var(--accent-dark);
+  --dv-accent-tint: var(--accent-tint);
+  --dv-card: var(--card-bg);
+  --dv-text: var(--text);
+  --dv-text-dim: var(--text-dim);
+  --dv-border: var(--border);
+  --dv-radius: var(--radius);
+  --dv-mono: var(--font-mono);
+  --dv-condensed: var(--font-condensed);
+  --dv-body: var(--font-body);
 }
 
 * { box-sizing: border-box; }
 
+/* `el.hidden = true` must always actually hide the element. A class with
+   its own `display: flex|grid|block` at equal (author-origin) specificity
+   to the UA's `[hidden] { display: none }` wins ties by source order, so
+   any such class landing after this stylesheet's `[hidden]` rule silently
+   defeats it. This bit 5 separate elements one at a time before anyone
+   noticed the pattern (.wv-overlay, .dv-filters-count, .scan-idle-summary,
+   .scan-status-bar, .new-bar each got their own `.foo[hidden]{display:
+   none}` patch) -- fixed once, generically, with !important so no future
+   `display:` rule can win the tie regardless of source order or
+   specificity. The five per-class patches are gone; this replaces them. */
+[hidden] { display: none !important; }
+
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+
+/* Used throughout as a generic small/dim secondary-text paragraph or span
+   (Scan Now's subtitle, Settings' status lines and empty states, the
+   Browser tab's intro) -- most of its call sites had no rule at all (only
+   scoped compounds like `.deal-card .meta` existed), so they rendered as
+   full-size body-black text instead. */
+.meta { font-size: 0.85rem; color: var(--text-dim); margin: 4px 0; }
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-body);
   background: var(--bg);
   color: var(--text);
 }
+
+h1, h2, h3, h4 { font-family: var(--font-condensed); font-weight: 700; margin: 0 0 8px; }
 
 .topbar {
   display: flex;
@@ -28,48 +85,88 @@ body {
   background: var(--card-bg);
   border-bottom: 1px solid var(--border);
 }
-.topbar h1 { font-size: 1.2rem; margin: 0; }
+.topbar h1 {
+  font-size: 1.3rem;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
 
 .scan-status { display: flex; align-items: center; gap: 10px; }
 .progress-detail { font-size: 0.78rem; color: var(--text-dim); }
 .badge {
+  font-family: var(--font-body);
   font-size: 0.8rem;
+  font-weight: 600;
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--border);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
   color: var(--text-dim);
 }
-.badge.idle { background: #e6f4ea; color: var(--green); }
-.badge.scanning { background: #fff4e5; color: var(--accent); }
-.badge.needs_login { background: #fdecea; color: var(--danger); }
+.badge.idle { background: #e6f4ea; color: var(--green); border-color: var(--green); }
+.badge.scanning { background: var(--accent-tint); color: var(--accent-dark); border-color: var(--accent); }
+.badge.needs_login, .badge.unreachable, .badge.unknown { background: #fdecea; color: var(--danger); border-color: var(--danger); }
 
 button {
   cursor: pointer;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 8px 14px;
   background: var(--accent);
   color: white;
+  font-family: var(--font-body);
   font-weight: 600;
 }
 button:hover { opacity: 0.9; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Secondary/outline action -- deliberately a standalone class (not scoped
+   under `.modal-actions .secondary`, its original form) so it works
+   wherever a button carries class="secondary", not only inside that one
+   container. Scoped-only was itself a bug: #sn-cancel (Scan Now),
+   #settings-relist-btn and #tool-repair (Settings) all carry this class
+   outside any `.modal-actions`, so all three silently fell through to the
+   plain solid-accent `button{}` default instead -- confirmed live
+   2026-09-02, "Cancel" and "Start scan" rendering as two identical solid
+   orange buttons in the Scan Now dialog. */
+.secondary {
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.secondary:hover { border-color: var(--accent); color: var(--accent-dark); opacity: 1; }
+
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 10px 20px 0;
+  gap: 20px;
+  padding: 0 20px;
   background: var(--card-bg);
   border-bottom: 1px solid var(--border);
+  /* Plain horizontal scroll rather than wrap/shrink -- six tabs' worth of
+     text (Deals/Shopping List/History/Browser/Logs/Settings) doesn't fit
+     390px, and wrapping would eat a second full row under the brand/scan
+     button permanently. Cheap fallback ahead of the dedicated mobile pass
+     (AGENT_BRIEF.md's wireframe 2c note) rather than a broken layout. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .tab-btn {
   background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   color: var(--text-dim);
-  border-radius: 8px 8px 0 0;
-  padding: 10px 16px;
-  font-weight: 500;
+  padding: 14px 2px;
+  margin-bottom: -1px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.94rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.tab-btn.active { background: var(--bg); color: var(--text); font-weight: 700; }
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { background: transparent; color: var(--text); border-bottom-color: var(--accent); font-weight: 700; }
 
 main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 
@@ -83,12 +180,17 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   margin-bottom: 16px;
 }
 .filters input[type="search"] { flex: 1; min-width: 200px; }
-.filters input, .filters select {
+/* :not(checkbox/radio) -- this used to blanket-target every <input> inside
+   .filters, including the Logs tab's Auto-scroll/Pause checkboxes, giving
+   each checkbox a padded, bordered, background-filled box on top of its
+   native appearance. */
+.filters input:not([type="checkbox"]):not([type="radio"]), .filters select {
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--card-bg);
   color: var(--text);
+  font-family: var(--font-body);
 }
 .filters label {
   display: flex;
@@ -98,6 +200,10 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   color: var(--text-dim);
 }
 
+/* History tab (#history-grid) -- the one surviving consumer of .deal-card/
+   .deal-grid/.tag/.discount-badge; everything else that used to share this
+   card language (the old Deals table, shopping-list cards) was rebuilt
+   under .dv-*/.sl-* and is removed below instead of carried along unused. */
 .deal-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -113,12 +219,18 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  font-family: var(--font-body);
 }
 .deal-card:hover { border-color: var(--accent); }
-.deal-card img { width: 100%; height: 120px; object-fit: contain; background: #fafafa; border-radius: 6px; }
-.deal-card .name { font-weight: 600; font-size: 0.92rem; line-height: 1.3; }
+.deal-card img { width: 100%; height: 120px; object-fit: contain; background: #fafafa; border-radius: var(--radius); }
+.deal-card .name { font-family: var(--font-condensed); font-weight: 600; font-size: 1rem; line-height: 1.3; }
 .deal-card .price-row { display: flex; align-items: baseline; gap: 8px; }
-.deal-card .price { font-size: 1.2rem; font-weight: 800; color: var(--accent); }
+/* Plain text color, not accent -- the Deals-tab row this card format
+   echoes prices the same way (.dv-price .now has no color override
+   either), so the price itself stays neutral and the tag carries the
+   color signal. Kept accent-tinted here too and it fought the discount
+   tag for attention twice over. */
+.deal-card .price { font-family: var(--font-condensed); font-size: 1.2rem; font-weight: 700; color: var(--text); }
 .deal-card .list-price { text-decoration: line-through; color: var(--text-dim); font-size: 0.85rem; }
 .deal-card .discount { color: var(--green); font-weight: 700; font-size: 0.85rem; }
 .deal-card .tags { display: flex; gap: 6px; }
@@ -127,10 +239,15 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   font-weight: 700;
   text-transform: uppercase;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
 }
-.tag.clearance { background: #fff4e0; color: var(--yellow); }
-.tag.penny { background: #fdecea; color: var(--danger); }
+/* Same accent-tint/penny-red treatment as the Deals-tab's .dv-tag rather
+   than a separate yellow/red pairing -- two colors for the same "this is a
+   clearance/penny deal" signal was itself an artifact of the two-system
+   split (Deals tab vs. History tab never reconciled their tag palettes). */
+.tag.clearance { background: var(--accent-tint); color: var(--accent-dark); border-color: var(--accent); }
+.tag.penny { background: #fdecea; color: #b23; border-color: #b23; }
 .deal-card .meta { font-size: 0.78rem; color: var(--text-dim); }
 
 .modal {
@@ -138,7 +255,6 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   background: rgba(0,0,0,0.4);
   display: flex; align-items: center; justify-content: center;
 }
-.modal.hidden { display: none; }
 .modal-content {
   background: var(--card-bg);
   border-radius: var(--radius);
@@ -148,6 +264,8 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   max-height: 85vh;
   overflow-y: auto;
   position: relative;
+  font-family: var(--font-body);
+  color: var(--text);
 }
 .modal-close {
   position: absolute; top: 10px; right: 10px;
@@ -155,79 +273,32 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   font-size: 1.4rem; padding: 4px 10px;
 }
 .modal-actions { display: flex; gap: 8px; margin-top: 14px; }
-.modal-actions .secondary { background: var(--border); color: var(--text); }
 
-table.history-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
+table.history-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; font-family: var(--font-body); }
 table.history-table th, table.history-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
 
-.table-wrap { overflow-x: auto; }
-table.deal-table, table.detail-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.deal-table th, .detail-table th {
-  text-align: left;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--text-dim);
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.deal-table td, .detail-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-  font-size: 0.88rem;
-}
-.deal-table tr:last-child td, .detail-table tr:last-child td { border-bottom: none; }
-.deal-table tbody tr:hover { background: var(--bg); cursor: pointer; }
-.deal-table tbody tr.focused { outline: 2px solid var(--accent); outline-offset: -2px; }
-.deal-row.focused { outline: 2px solid var(--dv-accent); outline-offset: -2px; }
-.deal-table .thumb, .detail-table .thumb {
-  width: 48px; height: 48px; object-fit: contain; background: #fafafa; border-radius: 6px;
-}
-.deal-table .product-name, .detail-table .product-name { font-weight: 600; }
-.deal-table .product-dept, .detail-table .product-dept { font-size: 0.76rem; color: var(--text-dim); }
+.deal-row.focused { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Same accent/penny-red tag treatment as .tag.clearance/.tag.penny above
+   (History's dealCard()) and .dv-tag (Deals tab) -- three separate
+   discount-pill designs (yellow, and two others) for the identical "X% off"
+   signal was the same two-systems split repeated a third time. */
 .discount-badge {
   display: inline-block;
   font-size: 0.75rem;
   font-weight: 700;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #fff4e0;
-  color: var(--yellow);
+  border: 1px solid var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-dark);
 }
-.discount-badge.penny { background: #fdecea; color: var(--danger); }
-.deal-table .action-col, .detail-table .action-col { display: flex; gap: 6px; flex-wrap: wrap; }
-.deal-table .action-col button, .detail-table .action-col button { font-size: 0.78rem; padding: 6px 10px; }
-.deal-table .action-col button.secondary, .detail-table .action-col button.secondary { background: var(--border); color: var(--text); }
-.store-address-link { color: var(--accent); text-decoration: none; }
+.discount-badge.penny { border-color: #b23; background: #fdecea; color: #b23; }
+.store-address-link { color: var(--accent-dark); text-decoration: none; }
 .store-address-link:hover { text-decoration: underline; }
 .stock-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
 .stock-dot.low { background: var(--yellow); }
 .stock-dot.ok { background: var(--green); }
-
-.shopping-store-group { margin-bottom: 22px; }
-.shopping-store-group h3 { margin: 0 0 4px; font-size: 1rem; }
-.shopping-store-group .store-address-link { font-size: 0.8rem; }
-.shopping-section { margin: 10px 0 0 4px; }
-.shopping-section h4 { margin: 0 0 6px; font-size: 0.82rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
-.shopping-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 6px;
-}
-.shopping-item .thumb { width: 36px; height: 36px; object-fit: contain; background: #fafafa; border-radius: 6px; }
-.shopping-item .name { flex: 1; font-weight: 600; font-size: 0.86rem; }
-.shopping-item .price { font-weight: 700; color: var(--accent); }
 
 #settings-main dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
 #settings-main dt { font-weight: 600; color: var(--text-dim); }
@@ -246,14 +317,16 @@ table.deal-table, table.detail-table {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-dim);
+  font-family: var(--font-body);
 }
 .settings-form label.checkbox-label { flex-direction: row; align-items: center; font-weight: 500; }
 .settings-form input[type="text"], .settings-form input[type="number"] {
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--card-bg);
   color: var(--text);
+  font-family: var(--font-body);
   font-weight: 400;
 }
 .settings-form input:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -301,27 +374,26 @@ button.danger { background: var(--danger); }
 .logs-view .log-line.WARNING { color: var(--yellow); }
 .logs-view .log-line.ERROR { color: #ff8a80; }
 
-/* Deals tab -- rebuilt to match the "UI Redsign" wireframe handoff
-   directly (design_handoff_deals_page/), not the rest of the app's
-   visual language: steel-blue accent, Barlow/Barlow Condensed, monospace
-   labels, hairline borders, flowing rows (no <table>). Deliberately
-   scoped to #tab-deals only -- every other tab keeps today's look. */
+/* Deals tab -- rebuilt to match the "UI Redesign" wireframe handoff
+   directly (design_handoff_deals_page/): steel-blue accent, Barlow/Barlow
+   Condensed, monospace labels, hairline borders, flowing rows (no
+   <table>). The rest of the app now shares this palette/type system too
+   (see :root's token comment) -- what stays specific to this tab is its
+   layout (the sidebar/tree/row structure below) and its bumped 15px type
+   scale, not the colors or fonts. */
 main:has(#tab-deals.active) { max-width: 1400px; }
 
 #tab-deals {
-  --dv-accent: #5980a6;
-  --dv-accent-dark: #45657f;
-  --dv-accent-tint: #eaf0f5;
-  --dv-card: #ffffff;
-  --dv-text: #1d1f20;
-  --dv-text-dim: #6b6f72;
-  --dv-border: #dcdcdc;
-  --dv-radius: 4px;
-  --dv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --dv-condensed: "Barlow Condensed", sans-serif;
-  --dv-body: "Barlow", -apple-system, BlinkMacSystemFont, sans-serif;
+  /* --dv-* tokens live on :root (see top of file) -- this rule just
+     applies them as this tab's own font/size defaults. */
   font-family: var(--dv-body);
-  font-size: 15px; /* every rule below is still rem, which ignores this and is relative to <html> regardless of nesting -- each one was bumped directly instead (confirmed live 2026-09-01, this tab was uncomfortably small: "running at 120% zoom just to be comfortable") */
+  /* Every rule below is still rem, which ignores this and is relative to
+     <html> regardless of nesting -- each one was bumped directly instead
+     (confirmed live 2026-09-01, this tab was uncomfortably small: "running
+     at 120% zoom just to be comfortable"). This 15px is the baseline the
+     rest of the app was harmonized *toward* (fonts/colors/radius), not an
+     inconsistency to shrink back down -- do not reduce it. */
+  font-size: 15px;
 }
 
 .deals-layout { display: flex; gap: 24px; align-items: flex-start; }
@@ -450,7 +522,6 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   padding: 1px 7px;
   margin: 0 4px;
 }
-.dv-filters-count[hidden] { display: none; }
 .dv-popover {
   position: absolute;
   top: 100%;
@@ -601,6 +672,15 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   cursor: pointer;
   border: none;
   border-left: 1px solid var(--dv-accent);
+  /* Without this, each button fell through to the base `button{}` rule's
+     border-radius (a higher specificity rule wasn't setting one here to
+     override it) -- 4 individually-rounded corners peeking out of the
+     group's own `overflow: hidden` clip, seen as "boundary boxes visible
+     on want/not-interested" (rounded notches at the Want|Not
+     interested|caret seams instead of one flush rectangle). The group's
+     own border-radius (below) plus its overflow:hidden is what rounds the
+     outer corners; the buttons themselves should be perfectly square. */
+  border-radius: 0;
   padding: 8px 13px;
   font-size: 0.9rem;
   font-weight: 600;
@@ -708,20 +788,9 @@ main:has(#tab-deals.active) { max-width: 1400px; }
    old cramped 500px table modal ("too small to read", design handoff).
    Only .modal-content gets the modifier (added by openProductDetail,
    removed by openDeal) so History's per-deal modal keeps its old size.
-   Re-declares the #tab-deals steel-blue tokens since #deal-modal lives
-   outside #tab-deals in the DOM and wouldn't otherwise inherit them. */
+   --dv-* tokens now live on :root (see top of file), so this rule just
+   applies them as this modal's own font/color/sizing. */
 .modal-content.pd-detail {
-  --dv-accent: #5980a6;
-  --dv-accent-dark: #45657f;
-  --dv-accent-tint: #eaf0f5;
-  --dv-card: #ffffff;
-  --dv-text: #1d1f20;
-  --dv-text-dim: #6b6f72;
-  --dv-border: #dcdcdc;
-  --dv-radius: 4px;
-  --dv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --dv-condensed: "Barlow Condensed", sans-serif;
-  --dv-body: "Barlow", -apple-system, BlinkMacSystemFont, sans-serif;
   font-family: var(--dv-body);
   color: var(--dv-text);
   max-width: 860px;
@@ -812,7 +881,7 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .sn-store-name { font-weight: 600; }
 .sn-store-meta { font-size: 0.8rem; color: var(--text-dim); }
 .sn-dept-scope { margin: 10px 0 0 24px; font-size: 0.8rem; color: var(--text-dim); }
-.sn-dept-scope a { color: var(--accent); }
+.sn-dept-scope a { color: var(--accent-dark); }
 .sn-footer {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
@@ -827,16 +896,21 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .settings-sidebar { flex: 0 0 220px; border-right: 1px solid var(--border); padding-right: 16px; }
 .settings-sidebar-section { margin-bottom: 22px; }
 .settings-sidebar-label {
+  font-family: var(--font-mono);
   font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text-dim); margin-bottom: 6px;
 }
 .settings-tree { display: flex; flex-direction: column; gap: 2px; }
 .settings-tree-row {
   display: flex; flex-direction: column; gap: 1px; padding: 6px 8px;
-  border-radius: 6px; cursor: pointer; font-size: 0.88rem;
+  border-radius: var(--radius); cursor: pointer; font-size: 0.88rem;
 }
-.settings-tree-row:hover { background: var(--bg); }
-.settings-tree-row.selected { background: var(--bg); color: var(--accent); font-weight: 600; }
+/* Same accent-tint selection treatment as the Deals-tab sidebar's
+   .tree-row.selected -- the plain `var(--bg)` this used before was the
+   same color as the page background it sits on, so a selected retailer
+   was nearly invisible against an unselected one. */
+.settings-tree-row:hover { background: rgba(0, 0, 0, 0.035); }
+.settings-tree-row.selected { background: var(--accent-tint); color: var(--accent-dark); font-weight: 600; }
 .settings-tree-name, .settings-tree-row-name {
   display: flex; align-items: center; gap: 6px;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -847,18 +921,26 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .settings-main { flex: 1; min-width: 0; }
 
 .settings-panel-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
-.settings-panel-header h3 { margin: 0; }
+.settings-panel-header h3 { margin: 0; font-size: 1.4rem; text-transform: uppercase; letter-spacing: 0.02em; }
 .settings-badge {
+  font-family: var(--font-body);
   font-size: 0.76rem; padding: 3px 9px; border-radius: 999px;
   border: 1px solid var(--border); color: var(--text-dim);
 }
 .settings-badge.valid { color: var(--green); border-color: var(--green); }
 .settings-badge.needs_login, .settings-badge.expired { color: var(--danger); border-color: var(--danger); }
-.settings-enabled-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.86rem; margin-left: auto; }
+.settings-enabled-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.86rem; margin-left: auto; font-family: var(--font-body); }
 .settings-panel-note { font-size: 0.82rem; color: var(--text-dim); margin: 4px 0 18px; }
 
 .settings-section { margin: 22px 0; }
-.settings-section h4 { margin: 0 0 8px; font-size: 0.9rem; }
+/* Mono/uppercase section label, same convention as .sidebar-label and
+   .pd-section-label elsewhere in this file, rather than a plain bold <h4>
+   -- these are section dividers ("LOCATION & STORES", "DEPARTMENTS TO
+   WATCH"), not prose headings. */
+.settings-section h4 {
+  margin: 0 0 10px; font-size: 0.78rem; font-family: var(--font-mono);
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
+}
 .settings-section-summary { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 8px; }
 
 .settings-store-list { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
@@ -866,7 +948,7 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .settings-store-name { font-weight: 600; }
 .settings-store-meta { font-size: 0.78rem; color: var(--text-dim); }
 .settings-rescan-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-.settings-rescan-row a { color: var(--accent); font-size: 0.86rem; }
+.settings-rescan-row a { color: var(--accent-dark); font-size: 0.86rem; }
 .settings-rescan-row .meta { margin: 0; }
 
 .settings-dept-filter { max-width: 320px; margin-bottom: 8px; }
@@ -877,7 +959,10 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 .settings-dept-count { font-size: 0.78rem; color: var(--text-dim); }
 
 .settings-danger-zone { border: 1px solid var(--danger); border-radius: var(--radius); padding: 14px; max-width: 480px; }
-.settings-danger-zone h4 { margin: 0 0 8px; color: var(--danger); }
+.settings-danger-zone h4 {
+  margin: 0 0 8px; font-size: 0.78rem; font-family: var(--font-mono);
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--danger);
+}
 
 .build-footer {
   text-align: center;
@@ -886,3 +971,487 @@ main:has(#tab-deals.active) { max-width: 1400px; }
   color: var(--text-dim);
   opacity: 0.6;
 }
+
+/* ==========================================================================
+   Design-v2 gap close -- header wireframe 5b (detailed scan status +
+   cancel) and screen 2a residuals (Watching rows, status tag, list
+   footer). Uses the --dv-* tokens the Deals-tab rewrite already
+   introduced, since these pieces are part of that same redesign pass.
+   ========================================================================== */
+
+/* Row 1's quiet idle running total, next to Scan now. Visibility is
+   handled by the global [hidden] rule at the top of this file. */
+.scan-idle-summary { display: flex; align-items: center; font-size: 0.82rem; color: var(--dv-text-dim); }
+.scan-idle-text { font-family: var(--dv-body); white-space: nowrap; }
+
+/* Row 2 -- only ever in the DOM with content while scanner.state ===
+   "scanning" (app.js's renderScanStatusBar); `hidden` the rest of the
+   time, never a reserved strip. Visibility is handled by the global
+   [hidden] rule at the top of this file. */
+.scan-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  background: var(--dv-card);
+  border-bottom: 1px solid var(--dv-border);
+  font-family: var(--dv-body);
+}
+
+.scanbar-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--dv-accent);
+  animation: scanbar-pulse 1.4s ease-in-out infinite;
+}
+@keyframes scanbar-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.scanbar-label { font-weight: 700; color: var(--dv-text); flex-shrink: 0; }
+.scanbar-breadcrumb { color: var(--dv-text-dim); flex-shrink: 0; }
+
+.scanbar-progress-wrap { flex: 1; min-width: 120px; }
+.scanbar-progress-text { font-size: 0.84rem; color: var(--dv-text-dim); text-align: right; margin-bottom: 4px; }
+.scanbar-progress-track {
+  height: 4px;
+  background: var(--dv-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.scanbar-progress-fill {
+  height: 100%;
+  background: var(--dv-accent);
+  transition: width 0.4s ease;
+}
+
+.scanbar-cancel-btn {
+  flex-shrink: 0;
+  background: var(--dv-card);
+  border: 1px solid var(--dv-border);
+  color: var(--dv-text);
+  font-weight: 600;
+  border-radius: var(--dv-radius);
+  padding: 7px 12px;
+}
+.scanbar-cancel-btn:hover:not(:disabled) { border-color: var(--dv-accent); color: var(--dv-accent-dark); }
+
+.scanbar-divider { width: 1px; align-self: stretch; background: var(--dv-border); flex-shrink: 0; }
+
+.scanbar-odometer { flex-shrink: 0; text-align: right; }
+.scanbar-odometer-label {
+  font-family: var(--dv-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dv-text-dim);
+  margin-bottom: 4px;
+}
+.scanbar-odometer-rate { font-family: var(--dv-mono); font-size: 0.78rem; color: var(--dv-text-dim); margin-top: 4px; }
+
+/* Mechanical digit-counter odometer -- only the scanning status bar's
+   big/legible row 2 (see app.js's renderOdometer). The idle row 1 total
+   renders as plain comma-formatted text instead: at odometer-small's size
+   the bordered digit cells ran together illegibly (screenshot
+   08-shopping-lists), and the wireframe's own idle row (5b) draws it as
+   plain text anyway. */
+.odometer { display: inline-flex; font-family: var(--dv-mono); font-variant-numeric: tabular-nums; }
+.odometer-digit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--dv-border);
+  background: var(--dv-card);
+  color: var(--dv-text);
+}
+.odometer-digit.odometer-group-gap { margin-right: 3px; }
+.odometer-digit.rolled { color: var(--dv-accent); border-color: var(--dv-accent); font-weight: 700; }
+
+.odometer-big .odometer-digit { width: 22px; height: 30px; font-size: 1.15rem; font-weight: 700; margin-left: 2px; border-radius: 2px; }
+.odometer-big .odometer-digit:first-child { margin-left: 0; }
+
+/* Screen 2a's Watching rows -- deal_kind='upcoming_clearance', always
+   zero rows today (see app.js's isWatching), built correctly regardless. */
+.deal-row .dv-thumb-watching { border-style: dashed; }
+.deal-row .dv-no-drop { font-size: 0.84rem; color: var(--dv-text-dim); font-style: italic; }
+.dv-split .dv-close-eye-btn { background: var(--dv-accent); color: white; }
+.dv-split .dv-close-eye-btn:hover { background: var(--dv-accent-dark); }
+
+/* Screen 2a's list footer -- "28 more · J/K move · W want · D never show
+   again" (see app.js's renderDealListFooter). */
+.dv-list-footer {
+  padding: 10px 16px;
+  font-family: var(--dv-mono);
+  font-size: 0.78rem;
+  color: var(--dv-text-dim);
+}
+/* "N more" -- a real control now (extendDealWindow), not just static text;
+   styled to read as part of the footer sentence rather than a button. */
+.dv-load-more-btn {
+  font: inherit;
+  color: var(--dv-accent-dark);
+  font-weight: 600;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.dv-load-more-btn:hover { text-decoration: underline; }
+
+/* Screen 2a gap-close (design-v2) -- thumbnail is a link (HANDOFF_DEALS_PAGE.md
+   screen 2a, row column 1) wrapping the same img/placeholder this file
+   already sizes via .dv-thumb/.dv-thumb-placeholder; the anchor itself just
+   needs to behave as the flex item those rules used to size directly. */
+.deal-row .dv-thumb-link { display: block; flex-shrink: 0; line-height: 0; }
+
+
+/* ==========================================================================
+   Screens 3a (shopping lists, desktop) and 3b (mobile walking view) --
+   docs/HANDOFF_DEALS_PAGE.md. --dv-* tokens now live on :root (see top of
+   file) rather than being redeclared per-scope, so #tab-shopping and
+   .wv-overlay (both outside #tab-deals in the DOM) inherit them like
+   everything else; this rule just applies them as this tab's own
+   font/color/sizing. .dv-btn / .dv-btn-outline / .dv-tag themselves are
+   already scope-free (defined as bare classes higher up), so they're
+   reused as-is once the tokens they read are in scope.
+   ========================================================================== */
+#tab-shopping, .wv-overlay {
+  font-family: var(--dv-body);
+  color: var(--dv-text);
+  font-size: 15px; /* matches #tab-deals -- see that rule's comment on why rem alone isn't enough */
+}
+main:has(#tab-shopping.active) { max-width: 1400px; }
+
+.sl-btn-primary { background: var(--dv-accent); color: #fff; border-color: var(--dv-accent); }
+.sl-btn-primary:hover { background: var(--dv-accent-dark); border-color: var(--dv-accent-dark); }
+
+/* --- Summary bar: "3 STORE LISTS · 14 ITEMS", per-store tags, Email all,
+   the "lists never merge" note. --- */
+.sl-summary-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.sl-summary-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sl-summary-count { font-family: var(--dv-condensed); font-weight: 700; font-size: 20px; letter-spacing: 0.02em; }
+.sl-store-tags { display: flex; gap: 7px; flex-wrap: wrap; }
+.sl-store-tag {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--dv-text-dim);
+  border: 1px solid var(--dv-border);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.sl-summary-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.sl-merge-note { font-size: 0.84rem; color: var(--dv-text-dim); font-style: italic; }
+
+/* --- Two-column grid, 1px dividers via the container-background trick
+   (a irregular mix of full cards and full-width collapsed rows makes
+   nth-child border rules unreliable -- see app.js's isCollapsed). --- */
+.sl-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--dv-border);
+  border: 1px solid var(--dv-border);
+  border-radius: var(--dv-radius);
+  overflow: hidden;
+}
+/* #tab-shopping has no dedicated mobile wireframe (only 3a-desktop and
+   3b's walking-view overlay are drawn) -- but the tab itself is still
+   reachable from a phone's top nav, and the fixed 2-column grid above
+   overflowed the viewport there (confirmed live during UAT 2026-09-02:
+   cards were cut off mid-width at 390px, not just cramped). One column
+   is a minimal, correct fallback until a real mobile browse pass lands;
+   the walking-view overlay (this file's next section) is unaffected --
+   it's already viewport-width, not a grid column. */
+@media (max-width: 760px) {
+  .sl-grid { grid-template-columns: 1fr; }
+}
+.sl-card, .sl-collapsed-row { background: var(--dv-card); }
+.sl-card { padding: 18px 20px; }
+
+.sl-card-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.sl-card-title { font-family: var(--dv-condensed); font-weight: 700; font-size: 19px; }
+.sl-card-count { font-size: 0.86rem; color: var(--dv-text-dim); flex-shrink: 0; }
+.sl-card-address { font-size: 0.9rem; color: var(--dv-text-dim); margin-top: 6px; }
+.sl-card-distance { font-size: 0.9rem; color: var(--dv-text-dim); margin-top: 2px; }
+
+.sl-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.sl-card-actions a.dv-btn { text-decoration: none; display: inline-block; }
+
+.sl-email-note { font-size: 0.82rem; color: var(--dv-text-dim); margin: -4px 0 14px; max-width: 46em; }
+
+.sl-aisle-header {
+  font-family: var(--dv-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--dv-text-dim);
+  background: rgba(0, 0, 0, 0.03);
+  padding: 7px 10px;
+  margin: 10px -20px 0;
+}
+.sl-card:first-child .sl-aisle-header:first-of-type { margin-top: 4px; }
+
+.sl-item-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--dv-border);
+}
+.sl-item-row:last-child { border-bottom: none; }
+.sl-item-checkbox { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--dv-accent); cursor: pointer; }
+.sl-thumb, .sl-thumb-placeholder, .sl-thumb-dashed {
+  width: 40px; height: 40px; flex-shrink: 0; border-radius: 2px; object-fit: contain; background: #fafafa;
+}
+.sl-thumb, .sl-thumb-placeholder { border: 1px solid var(--dv-border); }
+.sl-thumb-placeholder { background: repeating-linear-gradient(45deg, #f4f4f4, #f4f4f4 4px, #ececec 4px, #ececec 8px); }
+.sl-thumb-dashed { border: 1px dashed var(--dv-border); background: transparent; }
+.sl-item-body { flex: 1; min-width: 0; }
+.sl-item-name { font-weight: 600; font-size: 0.94rem; }
+.sl-item-sub { font-size: 0.82rem; color: var(--dv-text-dim); margin-top: 2px; }
+.sl-item-sub strong { color: var(--dv-text); }
+.sl-item-price { text-align: right; font-family: var(--dv-condensed); font-weight: 700; font-size: 16px; flex-shrink: 0; }
+.sl-item-qty { font-family: var(--dv-body); font-weight: 400; font-size: 0.78rem; color: var(--dv-text-dim); margin-top: 1px; }
+
+.sl-item-purchased .sl-item-name { text-decoration: line-through; color: var(--dv-text-dim); }
+.sl-item-purchased .sl-thumb { opacity: 0.5; }
+.sl-item-cantfind { background: rgba(0, 0, 0, 0.025); margin: 0 -20px; padding-left: 24px; padding-right: 24px; }
+.sl-item-cantfind .sl-item-name { color: var(--dv-text-dim); }
+
+.sl-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dv-border);
+  font-size: 0.86rem;
+  color: var(--dv-text-dim);
+}
+.sl-clear-btn {
+  background: none;
+  border: none;
+  color: var(--dv-accent-dark);
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-family: var(--dv-body);
+}
+
+/* --- Collapsed store-list row (screen 3a's overflow case). --- */
+.sl-collapsed-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 20px;
+  flex-wrap: wrap;
+}
+.sl-collapsed-name { font-family: var(--dv-condensed); font-weight: 700; font-size: 16px; flex-shrink: 0; }
+.sl-collapsed-meta { flex: 1; min-width: 200px; font-size: 0.88rem; color: var(--dv-text-dim); }
+.sl-collapsed-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* --- Print -- "same aisle-ordered content as the email" (handoff). The
+   Print button (renderStoreCard) fills #print-area and toggles
+   body.printing-list; this block hides everything else for the print
+   media type only (the screen view is unaffected -- #print-area stays
+   display:none there). --- */
+#print-area { display: none; }
+@media print {
+  body.printing-list > header,
+  body.printing-list > nav,
+  body.printing-list > #scan-status-bar,
+  body.printing-list > footer,
+  body.printing-list > #deal-modal,
+  body.printing-list > #walking-view {
+    display: none !important;
+  }
+  body.printing-list main > *:not(#tab-shopping) { display: none !important; }
+  body.printing-list #tab-shopping > *:not(#shopping-list-content) { display: none !important; }
+  body.printing-list #shopping-list-content > *:not(#print-area) { display: none !important; }
+  body.printing-list #print-area {
+    display: block !important;
+    font-family: Georgia, serif;
+    color: #000;
+  }
+  body.printing-list #print-area h1 { font-size: 18px; margin: 0 0 4px; }
+  body.printing-list #print-area p { font-size: 12px; margin: 0 0 3px; }
+  body.printing-list #print-area h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+    margin: 14px 0 6px; border-bottom: 1px solid #999; padding-bottom: 2px;
+  }
+  body.printing-list #print-area ul { margin: 0 0 8px; padding-left: 16px; }
+  body.printing-list #print-area li { font-size: 12px; margin-bottom: 3px; }
+}
+
+/* ==========================================================================
+   Screen 3b -- mobile walking view. Fixed full-viewport overlay (outside
+   <main>, see index.html) rather than a tab -- it's reached from a 3a card,
+   not the nav. Built at a 390px intrinsic width per the wireframe; a later
+   responsive/media-query pass integrates it with the rest of the app's
+   breakpoints (AGENT_BRIEF.md's coordinating note) -- everything here is
+   scoped under #walking-view so that pass can layer on top without
+   touching these rules.
+   ========================================================================== */
+.wv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+}
+.wv-panel {
+  width: 100%;
+  max-width: 390px;
+  height: 100vh;
+  background: var(--dv-card);
+  color: var(--dv-text);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.25);
+}
+
+.wv-header { flex-shrink: 0; padding: 14px 16px 12px; border-bottom: 1px solid var(--dv-border); }
+.wv-top-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.wv-back { color: var(--dv-accent-dark); text-decoration: none; font-weight: 600; font-size: 0.92rem; }
+.wv-back:hover { text-decoration: underline; }
+.wv-left-count { font-size: 0.86rem; color: var(--dv-text-dim); }
+.wv-store-name { font-family: var(--dv-condensed); font-weight: 700; font-size: 22px; line-height: 1.15; margin-bottom: 6px; }
+.wv-address-line { font-size: 0.86rem; color: var(--dv-text-dim); margin-bottom: 10px; }
+.wv-address-line .wv-directions { color: var(--dv-accent-dark); font-weight: 600; text-decoration: none; }
+.wv-address-line .wv-directions:hover { text-decoration: underline; }
+.wv-progress { height: 4px; background: var(--dv-border); border-radius: 2px; overflow: hidden; }
+.wv-progress-fill { height: 100%; background: var(--dv-accent); transition: width 0.3s ease; }
+
+.wv-body { flex: 1; overflow-y: auto; }
+.wv-all-done { padding: 24px 16px; color: var(--dv-text-dim); font-size: 0.94rem; }
+
+.wv-current-aisle-header {
+  font-family: var(--dv-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--dv-accent-dark);
+  background: var(--dv-accent-tint);
+  padding: 8px 16px;
+}
+.wv-current-card { padding: 16px; border-bottom: 1px solid var(--dv-border); }
+.wv-current-top { display: flex; gap: 14px; margin-bottom: 14px; }
+.wv-current-photo {
+  width: 84px; height: 84px; flex-shrink: 0; border: 1px solid var(--dv-border);
+  border-radius: var(--dv-radius); object-fit: contain; background: #fafafa;
+}
+/* Re-asserts size against the general .wv-thumb-placeholder rule below --
+   same (0,1,0) specificity as .wv-current-photo alone, so without this
+   compound override the later general rule would win on source order and
+   shrink an image-less current item's photo to the 56px row size. */
+.wv-current-photo.wv-thumb-placeholder {
+  width: 84px;
+  height: 84px;
+  background: repeating-linear-gradient(45deg, #f4f4f4, #f4f4f4 4px, #ececec 4px, #ececec 8px);
+}
+.wv-current-info { flex: 1; min-width: 0; }
+.wv-current-name { font-family: var(--dv-condensed); font-weight: 600; font-size: 15px; margin-bottom: 5px; }
+.wv-current-price-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.wv-current-price { font-family: var(--dv-condensed); font-weight: 700; font-size: 17px; }
+.wv-discount-tag {
+  font-size: 0.78rem; font-weight: 700; color: var(--dv-accent-dark);
+  background: var(--dv-accent-tint); border-radius: 999px; padding: 2px 9px;
+}
+.wv-current-meta, .wv-current-sku { font-size: 0.84rem; color: var(--dv-text-dim); margin-top: 2px; }
+
+.wv-action-row { display: flex; gap: 8px; }
+.wv-action-row button {
+  min-height: 44px;
+  border-radius: var(--dv-radius);
+  font-family: var(--dv-body);
+  font-weight: 600;
+  font-size: 0.92rem;
+  cursor: pointer;
+  border: 1px solid var(--dv-border);
+  background: var(--dv-card);
+  color: var(--dv-text);
+}
+.wv-found-btn { flex: 1; background: var(--dv-accent); border-color: var(--dv-accent); color: #fff; }
+.wv-found-btn:hover { background: var(--dv-accent-dark); }
+.wv-cantfind-btn { flex: 0 0 auto; padding: 0 16px; }
+.wv-skip-btn { flex: 0 0 auto; padding: 0 14px; background: transparent; border-color: transparent; color: var(--dv-accent-dark); }
+
+.wv-aisle-header {
+  font-family: var(--dv-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.76rem;
+  color: var(--dv-text-dim);
+  background: rgba(0, 0, 0, 0.02);
+  padding: 7px 16px;
+}
+.wv-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--dv-border); }
+.wv-thumb, .wv-thumb-placeholder, .wv-thumb-dashed {
+  width: 56px; height: 56px; flex-shrink: 0; border-radius: var(--dv-radius); object-fit: contain; background: #fafafa;
+}
+.wv-thumb-placeholder { background: repeating-linear-gradient(45deg, #f4f4f4, #f4f4f4 4px, #ececec 4px, #ececec 8px); border: 1px solid var(--dv-border); }
+.wv-thumb-dashed { border: 1px dashed var(--dv-border); background: transparent; }
+.wv-row-body { flex: 1; min-width: 0; }
+.wv-row-name { font-weight: 600; font-size: 0.92rem; }
+.wv-row-sub { font-size: 0.82rem; color: var(--dv-text-dim); margin-top: 2px; }
+.wv-row-purchased { opacity: 0.55; }
+.wv-row-purchased .wv-row-name { text-decoration: line-through; }
+.wv-row-cantfind .wv-row-name { color: var(--dv-text-dim); }
+.wv-reason-link { color: var(--dv-accent-dark); text-decoration: underline; }
+
+.wv-aisle-unknown-row {
+  padding: 12px 16px;
+  color: var(--dv-text-dim);
+  font-size: 0.88rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--dv-border);
+}
+
+.wv-bottom-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--dv-border);
+  background: var(--dv-card);
+}
+.wv-bottom-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+.wv-no-longer-need {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--dv-border);
+  border-radius: var(--dv-radius);
+  background: var(--dv-card);
+  color: var(--dv-text);
+  font-family: var(--dv-body);
+  font-weight: 600;
+  cursor: pointer;
+}
+.wv-undo {
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--dv-accent-dark);
+  font-family: var(--dv-body);
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.wv-purchased-count { margin-left: auto; font-size: 0.88rem; color: var(--dv-text-dim); }

@@ -27,7 +27,9 @@ from scanner.orchestrator import (
     rescan_stores,
     run_scan,
 )
+from scanner.settings import eta_seconds as _compute_eta_seconds
 from scanner.settings import merge_settings, split_list
+from scanner.settings import progress_fraction as _compute_progress_fraction
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("clearance_scout.scanner")
@@ -77,11 +79,25 @@ _trigger_event = threading.Event()
 _trigger_department: str | None = None
 _trigger_store_ids: list[str] | None = None
 _status_lock = threading.Lock()
-_status = {"last_scan_started_at": None, "last_scan_result": None, "state": "starting"}
+_status = {
+    "last_scan_started_at": None, "last_scan_result": None, "state": "starting",
+    # Header wireframe 5b's "Cancel scan" -- distinct from `state` so the
+    # status bar doesn't disappear the instant Cancel is clicked (it's
+    # gated on state == "scanning", not on this flag): cancellation is
+    # cooperative and can take a few checkpoints to actually wind down
+    # (see orchestrator.py's ScanCancelled), during which the UI should
+    # keep showing progress with a "cancelling" indication, not vanish.
+    "cancel_requested": False,
+}
 # Live checkpoint progress (store/department/counts) for the in-progress
 # scan -- see orchestrator.py's on_progress. Separate from _status's
 # start/end-of-scan summary; cleared at the start of each scan.
 _progress: dict = {}
+# Cooperative cancel flag -- orchestrator.run_scan polls this (via
+# is_cancelled=_cancel_event.is_set, see _scan_all below) at the same
+# checkpoints it already reports progress at. Never used to kill the
+# process; see POST /cancel and orchestrator.ScanCancelled.
+_cancel_event = threading.Event()
 
 # The "repair missing data" tool -- a separate trigger/status pair from
 # the scan ones above since it's a genuinely different operation (no
@@ -121,7 +137,40 @@ def health():
 @app.get("/status")
 def status():
     with _status_lock:
-        return {**_status, "progress": dict(_progress)}
+        payload = {**_status, "progress": dict(_progress)}
+    # Computed fresh on every call from already-in-memory numbers (no DB,
+    # no extra work) -- cheap enough for the header's 2-3s poll (see
+    # web/backend/routes/scan.py). Kept out of _progress itself since both
+    # depend on wall-clock "now" at *read* time, not at the time the
+    # underlying checkpoint fired -- baking them into a stored dict would
+    # make them stale between polls.
+    payload["eta_seconds"] = _eta_seconds()
+    payload["progress_fraction"] = _progress_fraction()
+    return payload
+
+
+def _progress_fraction() -> float | None:
+    with _status_lock:
+        progress = dict(_progress)
+    return _compute_progress_fraction(progress)
+
+
+def _eta_seconds() -> float | None:
+    # The actual math is in scanner/settings.py (pure, testable without
+    # patchright being importable -- see its docstring) -- this wrapper
+    # only supplies the impure bits: the lock, current state, and "now" at
+    # *read* time (not at the time the underlying checkpoint fired, which
+    # would go stale between polls).
+    with _status_lock:
+        if _status.get("state") != "scanning":
+            return None
+        started_at = _status.get("last_scan_started_at")
+        progress = dict(_progress)
+
+    if not started_at:
+        return None
+    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds()
+    return _compute_eta_seconds(progress, elapsed)
 
 
 @app.get("/logs")
@@ -159,6 +208,23 @@ def trigger_scan(department: str | None = None, store_ids: list[str] | None = No
     _trigger_store_ids = store_ids
     _trigger_event.set()
     return {"triggered": True}
+
+
+@app.post("/cancel")
+def cancel_scan():
+    # Cooperative, not a kill -- sets the flag orchestrator.run_scan polls
+    # at its own checkpoints (see ScanCancelled); the main loop notices the
+    # scan finish (cancelled or not) and returns to idle on its own, same
+    # as any other scan outcome. A no-op (not an error) when nothing's
+    # running -- e.g. a double-click, or the scan finished on its own in
+    # the gap between the frontend rendering the button and this request
+    # landing.
+    with _status_lock:
+        if _status["state"] != "scanning":
+            return {"cancelled": False, "reason": "no scan in progress"}
+        _status["cancel_requested"] = True
+    _cancel_event.set()
+    return {"cancelled": True}
 
 
 @app.post("/repair-missing-data")
@@ -230,13 +296,19 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
     with _status_lock:
         _status["last_scan_started_at"] = datetime.now(timezone.utc).isoformat()
         _status["state"] = "scanning"
+        _status["cancel_requested"] = False
         _progress.clear()
-
-    def _on_progress(fields: dict) -> None:
-        with _status_lock:
-            _progress.update(fields)
+    _cancel_event.clear()  # stale set from a previous scan must never bleed into this one
 
     for slug in RETAILERS:
+        if _cancel_event.is_set():
+            # Cancel stops the whole scan operation, not just the current
+            # retailer -- a user hitting "Cancel scan" wants everything to
+            # stop, not just to skip ahead to the next retailer in
+            # RETAILERS (today always a single-element list, but this stays
+            # correct if that changes).
+            logger.info("Scan cancelled by request -- skipping remaining retailer(s): %s", slug)
+            break
         adapter = build_adapter(slug)
         try:
             with db.get_connection() as conn:
@@ -258,13 +330,28 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
                     db.get_watched_department_names(conn, retailer_row["id"])
                     if retailer_row is not None else None
                 )
+                # Threaded into every progress event below so the header's
+                # phase breadcrumb ("Home Depot > Cary #3608 > Lumber /
+                # Dimensional", wireframe 5b) has a retailer name to lead
+                # with -- run_scan's own on_progress calls don't carry one
+                # (it only ever sees a single adapter, not the slug loop),
+                # so it's added here instead of threading a new parameter
+                # through every _progress() call site in orchestrator.py.
+                retailer_display = retailer_row["display_name"] if retailer_row is not None else slug
+
+                def _on_progress_for_retailer(fields: dict, _display=retailer_display) -> None:
+                    with _status_lock:
+                        _progress.update(fields)
+                        _progress["retailer"] = _display
+
                 result = run_scan(
                     conn, browser_ctx, adapter, settings["zip_code"], radius_miles=settings["radius_miles"],
                     trigger=trigger, department_filter=department_filter, store_ids=store_ids,
                     watched_department_names=watched_department_names, watch_keywords=settings["watch_keywords"],
                     product_list_cache_hours=settings["product_list_cache_hours"],
                     recycle_browser_ctx=recycle_browser_ctx,
-                    on_progress=_on_progress,
+                    on_progress=_on_progress_for_retailer,
+                    is_cancelled=_cancel_event.is_set,
                 )
             browser_ctx = result.pop("browser_ctx", browser_ctx)
             logger.info("Scan complete for %s: %s", slug, result)
@@ -290,6 +377,8 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
 
     with _status_lock:
         _status["state"] = "idle"
+        _status["cancel_requested"] = False
+    _cancel_event.clear()  # done winding down (if it was ever set) -- next scan starts clean
 
     return browser_ctx
 

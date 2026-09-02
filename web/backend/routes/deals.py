@@ -14,6 +14,14 @@ class DeferBody(BaseModel):
     value: float | None = None  # unused for 'penny'
 
 
+class SaveBody(BaseModel):
+    # Optional -- most "Want" clicks (screen 2a) don't set a quantity up
+    # front; the list screens (3a/3b) let it be set/changed afterward via
+    # PUT /api/lists/items/{deal_id}/quantity. A bare POST with no body
+    # still works (FastAPI defaults an all-optional Pydantic body).
+    quantity: int | None = None
+
+
 @router.get("")
 def get_deals(
     status: list[str] | None = Query(default=None),
@@ -78,16 +86,26 @@ def get_deal(deal_id: int):
 
 
 @router.post("/{deal_id}/save")
-def save_to_list(deal_id: int):
+def save_to_list(deal_id: int, body: SaveBody | None = None):
+    # Puts the deal on its store's list -- db.add_deal_to_list also dual-
+    # writes deal.status='saved', unchanged, since History and other
+    # existing readers key off that. body is optional so the pre-existing
+    # frontend call (a bare POST, no body) keeps working unchanged
+    # alongside the list screens' quantity-aware add.
     with db.get_connection() as conn:
-        queries.set_deal_status(conn, deal_id, "saved")
+        db.add_deal_to_list(conn, deal_id, quantity=body.quantity if body else None)
     return {"ok": True}
 
 
 @router.post("/{deal_id}/bought")
 def mark_bought(deal_id: int):
+    # Ensures a list_item row exists (a deal marked bought via this older,
+    # direct endpoint may never have gone through /save first, e.g. a test
+    # or a future non-list "just buy it" shortcut) then resolves it --
+    # add_deal_to_list is idempotent/safe to call on an existing row.
     with db.get_connection() as conn:
-        queries.set_deal_status(conn, deal_id, "bought")
+        db.add_deal_to_list(conn, deal_id)
+        db.mark_list_item_purchased(conn, deal_id)
     return {"ok": True}
 
 
@@ -111,4 +129,16 @@ def defer(deal_id: int, body: DeferBody):
 def undefer(deal_id: int):
     with db.get_connection() as conn:
         db.undefer_deal(conn, deal_id)
+    return {"ok": True}
+
+
+@router.post("/{deal_id}/close-eye")
+def close_eye(deal_id: int):
+    """Screen 2a's "Close eye" action on a Watching row -- shortens the
+    deal's price-check cadence (see db.shorten_check_interval). Works on
+    any deal, not just deal_kind='upcoming_clearance' ones -- nothing
+    scanner-side reads deal_kind to decide whether to honor check_interval
+    yet, so there's no reason to gate this endpoint on it either."""
+    with db.get_connection() as conn:
+        db.shorten_check_interval(conn, deal_id)
     return {"ok": True}

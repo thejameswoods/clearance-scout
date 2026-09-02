@@ -19,9 +19,16 @@ SCANNER_URL = os.environ.get("SCANNER_INTERNAL_URL", "http://scanner:8090")
 
 @router.get("/status")
 def scan_status():
+    # Header wireframe 5b polls this every 2-3s while scanning (vs. 15s
+    # idle) -- everything below is deliberately cheap: two point/range
+    # reads for the odometer (queries.price_check_odometer, never a
+    # `COUNT(*)` over price_observation) plus the existing bounded-LIMIT
+    # panel queries, and the scanner's own /status is pure in-memory on its
+    # side (see scanner/main.py) -- no per-poll cost grows with scan size.
     with db.get_connection() as conn:
         recent_runs = queries.scan_status_panel(conn)
         backoff_events = queries.recent_backoff(conn)
+        price_checks = queries.price_check_odometer(conn)
     scanner_live_status = {}
     try:
         resp = httpx.get(f"{SCANNER_URL}/status", timeout=5)
@@ -32,7 +39,23 @@ def scan_status():
         "scanner": scanner_live_status,
         "recent_runs": recent_runs,
         "recent_backoff_events": backoff_events,
+        "price_checks": price_checks,
     }
+
+
+@router.post("/cancel")
+def cancel_scan():
+    """Header wireframe 5b's "Cancel scan" button -- proxies to the
+    scanner's own POST /cancel (cooperative, see
+    scanner/orchestrator.py's ScanCancelled), same degrade-gracefully
+    posture as /trigger above: an unreachable scanner is reported in the
+    body, not raised, so the dashboard shows a real error instead of a
+    500."""
+    try:
+        resp = httpx.post(f"{SCANNER_URL}/cancel", timeout=5)
+        return resp.json()
+    except httpx.HTTPError as exc:
+        return {"cancelled": False, "error": str(exc)}
 
 
 @router.get("/scope")

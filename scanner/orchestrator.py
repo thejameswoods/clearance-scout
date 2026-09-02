@@ -23,6 +23,22 @@ class ScanAbortedNeedsLogin(Exception):
     noVNC, instead of retrying a doomed request in a tight loop."""
 
 
+class ScanCancelled(Exception):
+    """Raised internally by run_scan's own cooperative-cancel checkpoints
+    (see `is_cancelled`) to unwind the store/department/price-check loops
+    in one motion -- caught inside run_scan itself, never escapes to the
+    caller (cancellation is a normal, requested outcome, not an error).
+    `open_scan_run_id` is the 'prices'-phase scan_run that was actually
+    in flight when cancellation was noticed (None if it landed between
+    stores/departments, with nothing open) -- closed out as 'cancelled'
+    instead of left 'running' forever (see db/init/001_schema.sql's
+    scan_run.status and web/backend header wireframe 5b's "Cancel scan")."""
+
+    def __init__(self, open_scan_run_id: int | None = None):
+        super().__init__("scan cancelled")
+        self.open_scan_run_id = open_scan_run_id
+
+
 def _matches_any(name: str, substrings: list[str] | None) -> bool:
     if not substrings:
         return True
@@ -59,6 +75,7 @@ def run_scan(
     product_list_cache_hours: float = 24.0,
     recycle_browser_ctx: Callable[[object], object] | None = None,
     on_progress: Callable[[dict], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> dict:
     """Runs one full scan (auth check -> stores in radius -> departments ->
     products -> prices) for one retailer, writing results to Postgres as it
@@ -116,14 +133,35 @@ def run_scan(
     status view (scanner/main.py's /status) so "what's it doing right
     now" doesn't require reading logs or the DB by hand (confirmed real
     friction this session, GitHub issue #2). Deliberately reuses the same
-    checkpoints as the logging above rather than firing per-item.
+    checkpoints as the logging above rather than firing per-item. Also
+    carries `price_checks_total` (the running odometer, see
+    common/db.py's increment_price_check_total) and, once a department's
+    size is known, `avg_department_size` (this scan's own running average
+    department size so far -- departments are the same list at every
+    store, see above, so it's a fair basis for scanner/main.py's
+    real-observed-rate ETA, not an arbitrary guess).
+
+    `is_cancelled`: polled at the same checkpoints as `on_progress`
+    (store start, department start, price-check heartbeat) -- a truthy
+    return cooperatively unwinds the scan (see ScanCancelled) instead of
+    killing the process, so the current scan_run row is always closed out
+    (as 'cancelled', not left 'running' forever) and nothing already
+    written is left half-done. None (the default) never cancels.
     """
 
     def _progress(**fields) -> None:
         if on_progress is not None:
             on_progress(fields)
 
-    retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_slug, "")
+    def _check_cancelled(open_scan_run_id: int | None = None) -> None:
+        # Cooperative cancel (scanner/main.py's POST /cancel sets the flag
+        # `is_cancelled` reads) -- checked only at the same checkpoints
+        # _progress() already fires at, not per-item, so a scan winds down
+        # at a natural boundary instead of being killed mid-request.
+        if is_cancelled is not None and is_cancelled():
+            raise ScanCancelled(open_scan_run_id)
+
+    retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_display_name, "")
     limiter = RateLimiter(
         policy=adapter.rate_limit_policy(),
         on_event=lambda event_type, detail: db.record_rate_limit_event(conn, retailer_id, event_type, detail),
@@ -188,160 +226,213 @@ def run_scan(
     products_checked = 0
     errors_count = 0
     new_deal_ids: list[int] = []
+    cancelled = False
+    # Running average department size across this scan so far -- departments
+    # are the same list at every store (see this function's docstring), so
+    # this scan's own average is a fair basis for scanner/main.py's
+    # real-observed-rate ETA on remaining departments/stores, not a guess.
+    dept_size_sum = 0
+    dept_size_count = 0
 
-    for store_info in stores:
-        # Every discovered store gets its row kept current regardless of
-        # whether it's actually scanned this run -- distance/name/address
-        # would otherwise only refresh on a run that happens to include it.
-        store_id = db.upsert_store(
-            conn, retailer_id, store_info.retailer_store_id, store_info.zip_code,
-            store_info.name, store_info.address, store_info.distance_miles,
-        )
-        if store_info.retailer_store_id in disabled_store_ids:
-            continue  # disabled in Settings -- standing exclusion, always applies
-        if store_ids is not None and store_info.retailer_store_id not in store_ids:
-            continue  # outside this run's explicit scope (e.g. Scan Now)
-
-        adapter.select_store(browser_ctx, store_info)
-        browser_ctx.clearance_scout_store_id = store_info.retailer_store_id
-        stores_scanned += 1
-        store_departments_scanned = 0
-        logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
-        _progress(
-            phase="store", store=store_info.name or store_info.retailer_store_id,
-            store_index=stores_scanned, stores_total=len(scan_targets),
-            products_checked=products_checked, errors_count=errors_count,
-        )
-
-        for department in departments:
-            department_id = department_ids[department.retailer_department_id]
-            departments_scanned += 1
-            store_departments_scanned += 1
-
-            last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
-            cache_is_fresh = (
-                last_listed_at is not None
-                and datetime.now(timezone.utc) - last_listed_at < timedelta(hours=product_list_cache_hours)
+    try:
+        for store_info in stores:
+            # Every discovered store gets its row kept current regardless of
+            # whether it's actually scanned this run -- distance/name/address
+            # would otherwise only refresh on a run that happens to include it.
+            store_id = db.upsert_store(
+                conn, retailer_id, store_info.retailer_store_id, store_info.zip_code,
+                store_info.name, store_info.address, store_info.distance_miles,
             )
+            if store_info.retailer_store_id in disabled_store_ids:
+                continue  # disabled in Settings -- standing exclusion, always applies
+            if store_ids is not None and store_info.retailer_store_id not in store_ids:
+                continue  # outside this run's explicit scope (e.g. Scan Now)
 
-            scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "products", trigger)
-            if cache_is_fresh:
-                all_product_refs = [
-                    ProductRef(
-                        retailer_product_id=row["retailer_product_id"], name=row["name"],
-                        department=department, upc=row["upc"], image_url=row["image_url"],
-                    )
-                    for row in db.list_cached_products_for_department(conn, department_id)
-                ]
-            else:
-                try:
-                    all_product_refs = list(adapter.list_products(browser_ctx, department))
-                except Exception:
-                    logger.exception("Failed listing products for department %s", department.name)
-                    db.finish_scan_run(conn, scan_run_id, "failed", 0, 1)
-                    continue
-                db.mark_department_products_listed(conn, department_id)
-            product_refs = [p for p in all_product_refs if _matches_any(p.name, watch_keywords)]
-            db.finish_scan_run(conn, scan_run_id, "completed", len(product_refs), 0)
-            logger.info(
-                "Department %r: %d product(s) to check (%s)",
-                department.name, len(product_refs),
-                "from cache" if cache_is_fresh else "freshly listed",
-            )
+            _check_cancelled()  # nothing open yet -- the previous store's last scan_run is already closed
+
+            adapter.select_store(browser_ctx, store_info)
+            browser_ctx.clearance_scout_store_id = store_info.retailer_store_id
+            stores_scanned += 1
+            store_departments_scanned = 0
+            logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
             _progress(
-                phase="prices", department=department.name,
-                department_index=store_departments_scanned, departments_total=len(departments),
-                department_products_total=len(product_refs), department_products_checked=0,
+                phase="store", store=store_info.name or store_info.retailer_store_id,
+                store_index=stores_scanned, stores_total=len(scan_targets),
                 products_checked=products_checked, errors_count=errors_count,
             )
 
-            scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "prices", trigger)
-            department_hits = 0
-            department_errors = 0
-            # check_prices() (not the old per-item check_price() loop) --
-            # the default implementation on RetailerAdapter behaves
-            # identically to the old loop, but HomeDepotAdapter overrides
-            # it with real wave-based batched+concurrent requests (modeled
-            # on HDScanner's own validated approach: ~90x fewer round
-            # trips for the same work). Pacing between batches/waves is
-            # now the adapter's own concern -- `limiter` is still passed
-            # through so 403/success events keep landing in the same
-            # rate_limit_event log regardless of which implementation runs.
-            for i, result in enumerate(
-                adapter.check_prices(browser_ctx, product_refs, store_info, limiter), start=1
-            ):
-                if result.error:
-                    logger.error("Failed checking price for %s: %s", result.product_ref.retailer_product_id, result.error)
-                    errors_count += 1
-                    department_errors += 1
-                    continue
+            for department in departments:
+                _check_cancelled()  # same reasoning -- nothing open yet between departments
 
-                observation = result.observation
-                product_ref = result.product_ref
+                department_id = department_ids[department.retailer_department_id]
+                departments_scanned += 1
+                store_departments_scanned += 1
 
-                product_id = db.upsert_product(
-                    conn, retailer_id, product_ref.retailer_product_id, product_ref.name,
-                    department_id=department_id, upc=product_ref.upc,
-                    image_url=observation.image_url or product_ref.image_url,
-                    canonical_url=observation.canonical_url,
+                last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
+                cache_is_fresh = (
+                    last_listed_at is not None
+                    and datetime.now(timezone.utc) - last_listed_at < timedelta(hours=product_list_cache_hours)
                 )
-                db.upsert_store_product_location(conn, product_id, store_id, observation.aisle, observation.bay)
 
-                observation_id = db.insert_price_observation(
-                    conn, product_id, store_id, scan_run_id, observation.observed_at,
-                    observation.price_cents, observation.list_price_cents,
-                    observation.is_clearance, observation.is_penny,
-                    observation.fulfillment_state, observation.stock_quantity, observation.raw_signal,
+                scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "products", trigger)
+                if cache_is_fresh:
+                    all_product_refs = [
+                        ProductRef(
+                            retailer_product_id=row["retailer_product_id"], name=row["name"],
+                            department=department, upc=row["upc"], image_url=row["image_url"],
+                        )
+                        for row in db.list_cached_products_for_department(conn, department_id)
+                    ]
+                else:
+                    try:
+                        all_product_refs = list(adapter.list_products(browser_ctx, department))
+                    except Exception:
+                        logger.exception("Failed listing products for department %s", department.name)
+                        db.finish_scan_run(conn, scan_run_id, "failed", 0, 1)
+                        continue
+                    db.mark_department_products_listed(conn, department_id)
+                product_refs = [p for p in all_product_refs if _matches_any(p.name, watch_keywords)]
+                db.finish_scan_run(conn, scan_run_id, "completed", len(product_refs), 0)
+                logger.info(
+                    "Department %r: %d product(s) to check (%s)",
+                    department.name, len(product_refs),
+                    "from cache" if cache_is_fresh else "freshly listed",
                 )
-                _, is_new = db.upsert_deal_from_observation(
-                    conn, product_id, store_id, observation_id,
-                    observation.is_clearance, observation.is_penny,
+                dept_size_sum += len(product_refs)
+                dept_size_count += 1
+                _progress(
+                    phase="prices", department=department.name,
+                    department_index=store_departments_scanned, departments_total=len(departments),
+                    department_products_total=len(product_refs), department_products_checked=0,
+                    products_checked=products_checked, errors_count=errors_count,
+                    avg_department_size=dept_size_sum / dept_size_count,
                 )
-                if is_new:
-                    new_deal_ids.append(product_id)
-                if observation.is_clearance or observation.is_penny:
-                    department_hits += 1
-                    logger.info(
-                        "%s Found: %s at $%.2f%s",
-                        "\U0001f7e1" if observation.is_clearance else "\U0001fa99",
-                        product_ref.name, observation.price_cents / 100,
-                        " (new)" if is_new else "",
+
+                scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "prices", trigger)
+                department_hits = 0
+                department_errors = 0
+                # None until the loop below actually checks something -- a
+                # department that lists 0 matching products (e.g. every
+                # item filtered out by watch_keywords) never bumps the
+                # odometer, and the department-done _progress() call below
+                # must not report a stale/None total over whatever the
+                # last real value was (dict.update would clobber it).
+                price_checks_total: int | None = None
+                # check_prices() (not the old per-item check_price() loop) --
+                # the default implementation on RetailerAdapter behaves
+                # identically to the old loop, but HomeDepotAdapter overrides
+                # it with real wave-based batched+concurrent requests (modeled
+                # on HDScanner's own validated approach: ~90x fewer round
+                # trips for the same work). Pacing between batches/waves is
+                # now the adapter's own concern -- `limiter` is still passed
+                # through so 403/success events keep landing in the same
+                # rate_limit_event log regardless of which implementation runs.
+                for i, result in enumerate(
+                    adapter.check_prices(browser_ctx, product_refs, store_info, limiter), start=1
+                ):
+                    if result.error:
+                        logger.error("Failed checking price for %s: %s", result.product_ref.retailer_product_id, result.error)
+                        errors_count += 1
+                        department_errors += 1
+                        continue
+
+                    observation = result.observation
+                    product_ref = result.product_ref
+
+                    product_id = db.upsert_product(
+                        conn, retailer_id, product_ref.retailer_product_id, product_ref.name,
+                        department_id=department_id, upc=product_ref.upc,
+                        image_url=observation.image_url or product_ref.image_url,
+                        canonical_url=observation.canonical_url,
                     )
+                    db.upsert_store_product_location(conn, product_id, store_id, observation.aisle, observation.bay)
 
-                products_checked += 1
-
-                # Heartbeat every 10 results so a long department still
-                # shows live progress -- for a batching adapter these can
-                # arrive in bursts (one per wave) rather than a steady
-                # drip, which is fine, just less evenly spaced.
-                if i % 10 == 0 and i != len(product_refs):
-                    logger.info("Department %r: checked %d/%d so far", department.name, i, len(product_refs))
-                    _progress(
-                        phase="prices", department=department.name,
-                        department_index=store_departments_scanned, departments_total=len(departments),
-                        department_products_total=len(product_refs), department_products_checked=i,
-                        products_checked=products_checked, errors_count=errors_count,
+                    observation_id = db.insert_price_observation(
+                        conn, product_id, store_id, scan_run_id, observation.observed_at,
+                        observation.price_cents, observation.list_price_cents,
+                        observation.is_clearance, observation.is_penny,
+                        observation.fulfillment_state, observation.stock_quantity, observation.raw_signal,
                     )
+                    _, is_new = db.upsert_deal_from_observation(
+                        conn, product_id, store_id, observation_id,
+                        observation.is_clearance, observation.is_penny,
+                    )
+                    if is_new:
+                        new_deal_ids.append(product_id)
+                    if observation.is_clearance or observation.is_penny:
+                        department_hits += 1
+                        logger.info(
+                            "%s Found: %s at $%.2f%s",
+                            "\U0001f7e1" if observation.is_clearance else "\U0001fa99",
+                            product_ref.name, observation.price_cents / 100,
+                            " (new)" if is_new else "",
+                        )
 
-            db.finish_scan_run(conn, scan_run_id, "completed", products_checked, errors_count)
-            logger.info(
-                "Department %r: done -- %d checked, %d hit(s), %d error(s)",
-                department.name, len(product_refs), department_hits, department_errors,
-            )
-            _progress(
-                phase="prices", department=department.name,
-                department_index=store_departments_scanned, departments_total=len(departments),
-                department_products_total=len(product_refs), department_products_checked=len(product_refs),
-                products_checked=products_checked, errors_count=errors_count,
-            )
+                    products_checked += 1
+                    # Odometer bump (header wireframe 5b) -- one row per
+                    # successfully-checked product, same cadence as
+                    # products_checked above, riding this same per-item DB
+                    # round trip rather than a separate one. The DB write
+                    # happens every item (that's what makes the total
+                    # accurate); *reporting* it via on_progress rides the
+                    # existing heartbeat/department-done checkpoints below
+                    # instead of firing its own partial event every item --
+                    # keeps every progress event carrying the same full
+                    # field set (phase, department, counts, ...) rather
+                    # than a mix of full and single-key dicts, and costs
+                    # nothing extra since /status is only ever polled every
+                    # 2-3s regardless (see web/backend/routes/scan.py).
+                    price_checks_total = db.increment_price_check_total(conn)
 
-        if recycle_browser_ctx is not None:
-            browser_ctx = recycle_browser_ctx(browser_ctx)
+                    # Heartbeat every 10 results so a long department still
+                    # shows live progress -- for a batching adapter these can
+                    # arrive in bursts (one per wave) rather than a steady
+                    # drip, which is fine, just less evenly spaced.
+                    if i % 10 == 0 and i != len(product_refs):
+                        logger.info("Department %r: checked %d/%d so far", department.name, i, len(product_refs))
+                        _progress(
+                            phase="prices", department=department.name,
+                            department_index=store_departments_scanned, departments_total=len(departments),
+                            department_products_total=len(product_refs), department_products_checked=i,
+                            products_checked=products_checked, errors_count=errors_count,
+                            price_checks_total=price_checks_total,
+                        )
+                        _check_cancelled(scan_run_id)  # same checkpoint as the heartbeat above
+
+                db.finish_scan_run(conn, scan_run_id, "completed", products_checked, errors_count)
+                logger.info(
+                    "Department %r: done -- %d checked, %d hit(s), %d error(s)",
+                    department.name, len(product_refs), department_hits, department_errors,
+                )
+                _progress(
+                    phase="prices", department=department.name,
+                    department_index=store_departments_scanned, departments_total=len(departments),
+                    department_products_total=len(product_refs), department_products_checked=len(product_refs),
+                    products_checked=products_checked, errors_count=errors_count,
+                    **({"price_checks_total": price_checks_total} if price_checks_total is not None else {}),
+                )
+
+            if recycle_browser_ctx is not None:
+                browser_ctx = recycle_browser_ctx(browser_ctx)
+    except ScanCancelled as exc:
+        # Cooperative wind-down (see ScanCancelled/_check_cancelled above):
+        # close out whatever 'prices' scan_run was actually in flight so it
+        # never sits as 'running' forever, then return early -- same shape
+        # of result dict as a normal finish, just marked cancelled=True, so
+        # scanner/main.py's _scan_all treats it as a completed (not failed)
+        # attempt and goes back to idle.
+        cancelled = True
+        if exc.open_scan_run_id is not None:
+            db.finish_scan_run(conn, exc.open_scan_run_id, "cancelled", products_checked, errors_count)
+        logger.info("Scan cancelled by request -- %d product(s) checked before stopping", products_checked)
+        _progress(phase="cancelled", products_checked=products_checked, errors_count=errors_count)
 
     # "Not yet" deals whose threshold a fresh observation just satisfied --
     # at any of the product's stores, not just the one it was deferred at
     # (see db.reactivate_satisfied_defers's docstring). One pass at the end
     # of the scan rather than threaded into the per-item check loop above.
+    # Still worth doing even on a cancelled scan -- whatever was actually
+    # observed before stopping is real data, no reason to withhold it.
     reactivated_count = db.reactivate_satisfied_defers(conn)
     if reactivated_count:
         logger.info("%d deferred deal(s) reactivated (threshold met)", reactivated_count)
@@ -352,6 +443,7 @@ def run_scan(
         "products_checked": products_checked,
         "errors_count": errors_count,
         "new_deal_product_ids": new_deal_ids,
+        "cancelled": cancelled,
         "browser_ctx": browser_ctx,
     }
 
@@ -364,7 +456,7 @@ def rescan_stores(conn, browser_ctx, adapter: RetailerAdapter, zip_code: str, ra
     scanning every store, but that's a heavy way to answer "what stores
     are in range right now" or to pick up a newly opened/closed store --
     this is the cheap, on-demand version of just that one step."""
-    retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_slug, "")
+    retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_display_name, "")
 
     try:
         adapter.authenticate(browser_ctx)
@@ -541,6 +633,14 @@ def refresh_single_product(conn, browser_ctx, adapter: RetailerAdapter, product_
         db.upsert_deal_from_observation(
             conn, product_id, store_row["id"], observation_id, observation.is_clearance, observation.is_penny,
         )
+        # Counts toward the header odometer (wireframe 5b) same as a
+        # regular scan's checks -- this is a real price check against the
+        # retailer, just triggered on-demand for one product instead of by
+        # run_scan's department loop. No on_progress here (this path has no
+        # live progress UI of its own; the next scan's checkpoints will
+        # pick up the new total via db.increment_price_check_total's return
+        # value regardless).
+        db.increment_price_check_total(conn)
         if observation.is_clearance or observation.is_penny:
             hits += 1
 

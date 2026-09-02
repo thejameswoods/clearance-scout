@@ -30,6 +30,7 @@ class FakeBrowserContext:
 
 class ConfigurableFakeAdapter(RetailerAdapter):
     retailer_slug = "fake_retailer"
+    retailer_display_name = "Fake Retailer"
 
     def __init__(
         self,

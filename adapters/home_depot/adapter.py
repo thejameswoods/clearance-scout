@@ -40,6 +40,7 @@ WAVE_PARALLEL_CHUNKS = 5
 
 class HomeDepotAdapter(RetailerAdapter):
     retailer_slug = "home_depot"
+    retailer_display_name = "Home Depot"
 
     def authenticate(self, browser_ctx: Any) -> AuthResult:
         # Home Depot doesn't require a logged-in session to browse
