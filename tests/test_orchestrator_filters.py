@@ -28,12 +28,12 @@ def _electrical_and_plumbing_adapter():
     return ConfigurableFakeAdapter(departments=[electrical, plumbing], products_by_department=products)
 
 
-def test_watched_departments_skips_unwatched_departments_entirely(postgres_conn):
+def test_watched_department_names_skips_unwatched_departments_entirely(postgres_conn):
     adapter = _electrical_and_plumbing_adapter()
 
     result = run_scan(
         postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
-        watched_departments=["Electrical"],
+        watched_department_names={"Electrical"},
     )
 
     # Both products in Electrical checked; Plumbing's list_products should
@@ -44,15 +44,21 @@ def test_watched_departments_skips_unwatched_departments_entirely(postgres_conn)
     assert names == {"12-Gauge THHN Wire", "Duplex Outlet"}
 
 
-def test_watched_departments_matches_case_insensitively_by_substring(postgres_conn):
+def test_watched_department_names_is_an_exact_match_not_a_substring(postgres_conn):
+    # Explicit-selection semantics now (see common/db.py's
+    # get_watched_department_names) -- unlike the old flat text field,
+    # there's no partial/substring matching left at this layer. The set
+    # passed in is already fully expanded (descendants included) by the
+    # caller before it reaches here.
     adapter = _electrical_and_plumbing_adapter()
 
     result = run_scan(
         postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
-        watched_departments=["electric"],  # substring, lowercase
+        watched_department_names={"Electric"},  # not a real department name
     )
 
-    assert result["departments_scanned"] == 1
+    assert result["departments_scanned"] == 0
+    assert result["products_checked"] == 0
 
 
 def test_watch_keywords_filters_products_within_watched_departments(postgres_conn):
@@ -60,7 +66,7 @@ def test_watch_keywords_filters_products_within_watched_departments(postgres_con
 
     result = run_scan(
         postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
-        watched_departments=["Electrical"], watch_keywords=["wire"],
+        watched_department_names={"Electrical"}, watch_keywords=["wire"],
     )
 
     assert result["products_checked"] == 1
@@ -85,8 +91,8 @@ def test_department_filter_overrides_watch_list(postgres_conn):
 
     result = run_scan(
         postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
-        watched_departments=["Electrical"],   # would normally exclude Plumbing
-        department_filter="dept-plumbing",    # explicit manual override
+        watched_department_names={"Electrical"},  # would normally exclude Plumbing
+        department_filter="dept-plumbing",        # explicit manual override
     )
 
     assert result["departments_scanned"] == 1

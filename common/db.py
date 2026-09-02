@@ -16,6 +16,8 @@ from typing import Any, Iterator
 import psycopg
 from psycopg.rows import dict_row
 
+from common.departments import build_department_hierarchy
+
 @contextmanager
 def get_connection() -> Iterator[psycopg.Connection]:
     # Read lazily, not at import time — importing this module (e.g.
@@ -40,6 +42,14 @@ def upsert_retailer(conn, slug: str, display_name: str, base_url: str, adapter_v
         (slug, display_name, base_url, adapter_version),
     ).fetchone()
     return row["id"]
+
+
+def get_retailer_by_slug(conn, slug: str) -> dict[str, Any] | None:
+    """Read-only lookup (unlike upsert_retailer) -- None for a slug that's
+    never been scanned yet, so a caller can tell "not configured yet, use
+    pure env defaults" apart from "configured, has a real id/enabled
+    flag" without creating a row just to check."""
+    return conn.execute("SELECT id, enabled FROM retailer WHERE slug = %s", (slug,)).fetchone()
 
 
 def set_retailer_min_discount_pct(conn, retailer_id: int, min_discount_pct: float | None) -> None:
@@ -475,24 +485,27 @@ def set_credential_session_status(conn, retailer_id: int, status: str, session_l
 
 
 # --- editable scanner settings (dashboard overrides of env-var config) ------
+# Per retailer -- see db/init/001_schema.sql's scanner_settings docstring.
+# Departments-to-watch is its own table (watched_department), not a field
+# here -- see get_watched_department_names/set_watched_departments below.
 
 SCANNER_SETTINGS_FIELDS = (
-    "zip_code", "radius_miles", "watched_departments", "watch_keywords",
-    "product_list_cache_hours",
+    "zip_code", "radius_miles", "watch_keywords", "product_list_cache_hours",
 )
 
 
-def get_scanner_settings(conn) -> dict[str, Any] | None:
-    """The single settings-override row, or None if nothing's ever been
-    saved from the dashboard -- callers (scanner/main.py's
+def get_scanner_settings(conn, retailer_id: int) -> dict[str, Any] | None:
+    """This retailer's settings-override row, or None if nothing's ever
+    been saved from the dashboard for it -- callers (scanner/main.py's
     _current_settings) fall back to env-var defaults for a None field
     within the row, and for a None row entirely."""
     return conn.execute(
-        f"SELECT {', '.join(SCANNER_SETTINGS_FIELDS)} FROM scanner_settings WHERE id = 1"
+        f"SELECT {', '.join(SCANNER_SETTINGS_FIELDS)} FROM scanner_settings WHERE retailer_id = %s",
+        (retailer_id,),
     ).fetchone()
 
 
-def upsert_scanner_settings(conn, **fields: Any) -> None:
+def upsert_scanner_settings(conn, retailer_id: int, **fields: Any) -> None:
     """Only the keys actually passed get written -- an omitted field
     leaves whatever's already stored (or NULL/"use the env default") for
     it untouched, rather than every save having to resend the full set."""
@@ -505,11 +518,86 @@ def upsert_scanner_settings(conn, **fields: Any) -> None:
     columns = list(fields.keys())
     conn.execute(
         f"""
-        INSERT INTO scanner_settings (id, {", ".join(columns)}, updated_at)
-        VALUES (1, {", ".join(["%s"] * len(columns))}, now())
-        ON CONFLICT (id) DO UPDATE SET
+        INSERT INTO scanner_settings (retailer_id, {", ".join(columns)}, updated_at)
+        VALUES (%s, {", ".join(["%s"] * len(columns))}, now())
+        ON CONFLICT (retailer_id) DO UPDATE SET
             {", ".join(f"{c} = EXCLUDED.{c}" for c in columns)},
             updated_at = now()
         """,
-        list(fields.values()),
+        [retailer_id, *fields.values()],
     )
+
+
+def set_retailer_enabled(conn, retailer_id: int, enabled: bool) -> None:
+    conn.execute("UPDATE retailer SET enabled = %s WHERE id = %s", (enabled, retailer_id))
+
+
+def set_store_enabled(conn, store_id: int, enabled: bool) -> None:
+    conn.execute("UPDATE store SET enabled = %s WHERE id = %s", (enabled, store_id))
+
+
+def get_disabled_store_ids(conn, retailer_id: int) -> set[str]:
+    """retailer_store_id values (not DB ids) this retailer has explicitly
+    disabled -- the exclusion set orchestrator.run_scan applies against a
+    freshly *discovered* store list to get its default scan scope (every
+    discovered store except these) when no explicit store_ids (e.g. from
+    the Scan Now dialog) narrows it further. Deliberately an exclusion
+    set, not an enabled-allowlist: a brand-new store has no `store` row
+    yet at all, so an allowlist query would wrongly exclude it by default
+    (its DEFAULT true column value only ever applies once the row exists)."""
+    rows = conn.execute(
+        "SELECT retailer_store_id FROM store WHERE retailer_id = %s AND NOT enabled",
+        (retailer_id,),
+    ).fetchall()
+    return {r["retailer_store_id"] for r in rows}
+
+
+def get_watched_department_names(conn, retailer_id: int) -> set[str] | None:
+    """The full set of department names in scope for this retailer's
+    scans -- explicitly-watched departments (watched_department) plus
+    every descendant of each, matching the Deals-tab scope bar's "incl.
+    sub-departments" rule. None means nothing's explicitly watched, i.e.
+    "watch everything" (same default as the old flat watched_departments
+    field). Name-based, not ID-based: a freshly adapter-discovered
+    Department has a name but no DB id yet at scan-filter time (see
+    scanner/orchestrator.py's _select_departments)."""
+    watched_rows = conn.execute(
+        """
+        SELECT d.name FROM watched_department wd
+        JOIN department d ON d.id = wd.department_id
+        WHERE wd.retailer_id = %s
+        """,
+        (retailer_id,),
+    ).fetchall()
+    if not watched_rows:
+        return None
+    watched_names = {r["name"] for r in watched_rows}
+
+    all_rows = conn.execute("SELECT name FROM department WHERE retailer_id = %s", (retailer_id,)).fetchall()
+    hierarchy = build_department_hierarchy([r["name"] for r in all_rows])
+    children_by_name: dict[str, list[str]] = {}
+    for node in hierarchy:
+        if node["parent"]:
+            children_by_name.setdefault(node["parent"], []).append(node["name"])
+
+    expanded = set(watched_names)
+    stack = list(watched_names)
+    while stack:
+        name = stack.pop()
+        for child in children_by_name.get(name, []):
+            if child not in expanded:
+                expanded.add(child)
+                stack.append(child)
+    return expanded
+
+
+def set_watched_departments(conn, retailer_id: int, department_ids: list[int]) -> None:
+    """Replace-all for this retailer's explicit department selection --
+    the Settings checkbox tree always sends its full current selection,
+    not a diff."""
+    conn.execute("DELETE FROM watched_department WHERE retailer_id = %s", (retailer_id,))
+    for department_id in department_ids:
+        conn.execute(
+            "INSERT INTO watched_department (retailer_id, department_id) VALUES (%s, %s)",
+            (retailer_id, department_id),
+        )

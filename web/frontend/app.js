@@ -1021,62 +1021,10 @@ function setupScopeBar() {
   $("#dept-filter").addEventListener("input", () => renderDepartmentTree(window._departmentTree || []));
 }
 
-function scanConfigFormHtml(scanConfig) {
-  const joined = (arr) => (arr && arr.length ? arr.join(", ") : "");
-  return `
-    <form id="scan-config-form" class="settings-form">
-      <label>Retailers <input type="text" value="${escapeHtml((scanConfig.retailers || []).join(", "))}" disabled title="Not yet editable from here -- set via RETAILERS in .env"></label>
-      <label>ZIP code <input type="text" id="cfg-zip" value="${escapeHtml(scanConfig.zip_code || "")}" required></label>
-      <label>Radius (miles) <input type="number" id="cfg-radius" min="1" step="0.5" value="${scanConfig.radius_miles ?? ""}" required></label>
-      <label>Watched departments <input type="text" id="cfg-departments" placeholder="blank = all departments" value="${escapeHtml(joined(scanConfig.watched_departments))}"></label>
-      <label>Watch keywords <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml(joined(scanConfig.watch_keywords))}"></label>
-      <label>Product list cache (hours) <input type="number" id="cfg-cache-hours" min="0" step="1" value="${scanConfig.product_list_cache_hours ?? ""}"></label>
-      <div class="modal-actions">
-        <button type="submit">Save</button>
-        <span id="scan-config-save-status" class="meta"></span>
-      </div>
-    </form>
-  `;
-}
-
-function setupScanConfigForm() {
-  const form = $("#scan-config-form");
-  if (!form) return;
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const statusEl = $("#scan-config-save-status");
-    statusEl.textContent = "Saving…";
-    try {
-      await api("/api/settings/scan-config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          zip_code: $("#cfg-zip").value.trim(),
-          radius_miles: Number($("#cfg-radius").value),
-          watched_departments: $("#cfg-departments").value.trim(),
-          watch_keywords: $("#cfg-keywords").value.trim(),
-          product_list_cache_hours: Number($("#cfg-cache-hours").value),
-        }),
-      });
-      statusEl.textContent = "Saved -- takes effect on the next scan.";
-    } catch (e) {
-      statusEl.textContent = `Save failed: ${e.message}`;
-    }
-  });
-}
-
 function dataToolsHtml(missingCount) {
   const missingLabel = missingCount == null ? "unknown" : missingCount;
   return `
-    <h3>Data tools</h3>
     <div class="data-tools">
-      <div class="data-tool">
-        <div>
-          <strong>Force product re-list</strong>
-          <p class="meta">Clears the product-list cache for every department so the next scan re-lists from the retailer instead of serving cached SKUs -- use if new products stop showing up (see "Product list cache" above).</p>
-        </div>
-        <button id="tool-relist" class="secondary" type="button">Reset cache</button>
-      </div>
       <div class="data-tool">
         <div>
           <strong>Recompute deal statuses</strong>
@@ -1100,17 +1048,6 @@ function dataToolsHtml(missingCount) {
 
 function setupDataTools() {
   const statusEl = $("#data-tools-status");
-
-  $("#tool-relist").addEventListener("click", async () => {
-    if (!confirm("Clear the product-list cache for every department? The next scan re-lists products from scratch instead of using the cache (slower, more requests to the retailer).")) return;
-    statusEl.textContent = "Resetting…";
-    try {
-      const res = await api("/api/admin/reset-department-cache", { method: "POST" });
-      statusEl.textContent = `Done -- ${res.reset} department(s) will re-list on the next scan.`;
-    } catch (e) {
-      statusEl.textContent = `Failed: ${e.message}`;
-    }
-  });
 
   $("#tool-recompute").addEventListener("click", async () => {
     const override = $("#tool-recompute-override").checked;
@@ -1170,63 +1107,365 @@ async function pollRepairStatus(statusEl) {
   statusEl.textContent = "Still running after 10 minutes -- check the Logs tab.";
 }
 
+// --- Settings tab (wireframe screen 7 / 4c): per-retailer scan config,
+// store enable/disable, and a departments-to-watch checkbox tree, plus a
+// still-global Notifications/Data-tools section. `nav` is one of
+// {type:"retailer", id} / {type:"notifications"} / {type:"data-tools"} --
+// rebuilt fresh (not persisted) on every tab visit.
+const settingsState = { retailers: [], nav: null };
+
 async function loadSettings() {
-  const [retailers, telegram, scanConfig, missing] = await Promise.all([
-    api("/api/settings/retailers"),
-    api("/api/settings/telegram"),
-    api("/api/settings/scan-config"),
-    api("/api/admin/repair-missing-data/count").catch(() => null),
-  ]);
-  $("#settings-content").innerHTML = `
-    <h3>Scan configuration</h3>
-    ${scanConfig.error ? `<p class="meta">${escapeHtml(scanConfig.error)}</p>` : scanConfigFormHtml(scanConfig)}
-    <h3>Retailers</h3>
-    ${retailers.length ? `
-      <div class="settings-form" style="max-width:420px">
-        ${retailers.map((r) => `
-          <label>${escapeHtml(r.display_name)} (${escapeHtml(r.slug)}) -- minimum discount %
-            <span style="display:flex;gap:8px;align-items:center">
-              <input type="number" min="0" max="100" step="1" class="retailer-min-discount" data-retailer="${r.id}"
-                     value="${r.min_discount_pct ?? ""}" placeholder="no floor" style="max-width:100px">
-              <button type="button" class="secondary retailer-min-discount-save" data-retailer="${r.id}">Save</button>
-              <span class="meta retailer-min-discount-status" data-retailer="${r.id}"></span>
-            </span>
-          </label>
-        `).join("")}
+  settingsState.retailers = await api("/api/settings/retailers");
+  if (!settingsState.nav) {
+    settingsState.nav = settingsState.retailers.length
+      ? { type: "retailer", id: settingsState.retailers[0].id }
+      : { type: "notifications" };
+  }
+  renderSettingsSidebar();
+  await renderSettingsMain();
+}
+
+function renderSettingsSidebar() {
+  const retailerTree = $("#settings-retailer-tree");
+  retailerTree.innerHTML = settingsState.retailers.length
+    ? settingsState.retailers.map((r) => `
+        <div class="settings-tree-row ${settingsState.nav.type === "retailer" && settingsState.nav.id === r.id ? "selected" : ""}" data-retailer-id="${r.id}">
+          <span class="settings-enabled-dot ${r.enabled ? "" : "off"}"></span>
+          <span class="settings-tree-name">${escapeHtml(r.display_name)}</span>
+          <span class="settings-tree-meta">${r.store_count} store${r.store_count === 1 ? "" : "s"}</span>
+        </div>
+      `).join("")
+    : `<p class="meta">None configured yet</p>`;
+  retailerTree.querySelectorAll(".settings-tree-row").forEach((row) =>
+    row.addEventListener("click", () => {
+      settingsState.nav = { type: "retailer", id: Number(row.dataset.retailerId) };
+      renderSettingsSidebar();
+      renderSettingsMain();
+    })
+  );
+
+  const globalTree = $("#settings-global-tree");
+  const globalItems = [
+    { type: "notifications", label: "Notifications" },
+    { type: "data-tools", label: "Data tools" },
+  ];
+  globalTree.innerHTML = globalItems.map((item) => `
+    <div class="settings-tree-row ${settingsState.nav.type === item.type ? "selected" : ""}" data-nav="${item.type}">
+      <span class="settings-tree-name">${item.label}</span>
+    </div>
+  `).join("");
+  globalTree.querySelectorAll(".settings-tree-row").forEach((row) =>
+    row.addEventListener("click", () => {
+      settingsState.nav = { type: row.dataset.nav };
+      renderSettingsSidebar();
+      renderSettingsMain();
+    })
+  );
+}
+
+async function renderSettingsMain() {
+  const main = $("#settings-main");
+  if (settingsState.nav.type === "retailer") {
+    main.innerHTML = `<p class="meta">Loading…</p>`;
+    const detail = await api(`/api/settings/retailers/${settingsState.nav.id}`);
+    renderSettingsRetailerPanel(detail);
+  } else if (settingsState.nav.type === "notifications") {
+    await renderSettingsNotifications();
+  } else if (settingsState.nav.type === "data-tools") {
+    await renderSettingsDataTools();
+  }
+}
+
+const CREDENTIAL_STATUS_LABELS = { valid: "Connected", expired: "Session expired", needs_login: "Needs login" };
+
+function settingsStoreRowHtml(store) {
+  const distance = store.distance_miles != null ? `${store.distance_miles.toFixed(1)} mi` : "distance unknown";
+  const scanned = store.last_scanned_at ? `scanned ${relTime(store.last_scanned_at)}` : "never scanned";
+  return `
+    <label class="settings-store-row">
+      <input type="checkbox" class="settings-store-check" data-store-id="${store.store_id}" ${store.enabled ? "checked" : ""} />
+      <span class="settings-store-name">${escapeHtml(store.name || store.retailer_store_id)}</span>
+      <span class="settings-store-meta">${distance} · ${scanned}</span>
+    </label>
+  `;
+}
+
+function renderSettingsRetailerPanel(detail) {
+  const sc = detail.scan_config || {};
+  const statusLabel = CREDENTIAL_STATUS_LABELS[detail.credential_status] || "Not yet scanned";
+
+  $("#settings-main").innerHTML = `
+    <div class="settings-panel-header">
+      <h3>${escapeHtml(detail.display_name)}</h3>
+      <span class="settings-badge ${detail.credential_status || ""}">${statusLabel} · adapter v${escapeHtml(detail.adapter_version || "0")}</span>
+      <label class="settings-enabled-toggle"><input type="checkbox" id="settings-retailer-enabled" ${detail.enabled ? "checked" : ""} /> Enabled</label>
+    </div>
+    ${sc.error ? `<p class="settings-panel-note">Scanner unreachable -- showing saved values only.</p>` : ""}
+
+    <div class="settings-section">
+      <h4>Location</h4>
+      <form id="settings-config-form" class="settings-form">
+        <label>ZIP code <input type="text" id="cfg-zip" value="${escapeHtml(sc.zip_code || "")}" required></label>
+        <label>Radius (miles) <input type="number" id="cfg-radius" min="1" step="0.5" value="${sc.radius_miles ?? ""}" required></label>
+        <label>Watch keywords <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml((sc.watch_keywords || []).join(", "))}"></label>
+        <label>Product list cache (hours) <input type="number" id="cfg-cache-hours" min="0" step="1" value="${sc.product_list_cache_hours ?? ""}"></label>
+        <label>Minimum discount % <input type="number" id="cfg-min-discount" min="0" max="100" step="1" value="${detail.min_discount_pct ?? ""}" placeholder="no floor"></label>
+        <div class="modal-actions">
+          <button type="submit">Save changes</button>
+          <span id="settings-config-save-status" class="meta"></span>
+        </div>
+      </form>
+    </div>
+
+    <div class="settings-section">
+      <h4>Stores</h4>
+      <div class="settings-store-list">
+        ${detail.stores.length ? detail.stores.map(settingsStoreRowHtml).join("") : `<p class="meta">No stores discovered yet.</p>`}
       </div>
-    ` : `<p class="meta">None configured yet</p>`}
-    <h3>Telegram</h3>
+    </div>
+
+    <div class="settings-section">
+      <h4>Departments to watch</h4>
+      <div id="settings-dept-summary" class="settings-section-summary"></div>
+      <input type="text" id="settings-dept-filter" class="settings-dept-filter" placeholder="Filter departments" />
+      <div id="settings-dept-tree" class="settings-dept-tree"></div>
+      <div class="modal-actions" style="margin-top:8px">
+        <button id="settings-dept-save" type="button">Save departments</button>
+        <span id="settings-dept-save-status" class="meta"></span>
+      </div>
+    </div>
+
+    <div class="settings-danger-zone">
+      <h4>Danger zone</h4>
+      <div class="data-tool">
+        <div>
+          <strong>Force product re-list</strong>
+          <p class="meta">Clears this retailer's product-list cache so the next scan re-lists from the retailer instead of serving cached SKUs.</p>
+        </div>
+        <button id="settings-relist-btn" class="secondary" type="button">Reset cache</button>
+      </div>
+      <p id="settings-relist-status" class="meta"></p>
+    </div>
+  `;
+
+  setupSettingsConfigForm(detail);
+  setupSettingsStoreChecks();
+  setupSettingsDeptTree(detail);
+  setupSettingsDangerZone(detail);
+
+  $("#settings-retailer-enabled").addEventListener("change", async (ev) => {
+    await api(`/api/settings/retailers/${detail.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: ev.target.checked }),
+    });
+    const row = settingsState.retailers.find((r) => r.id === detail.id);
+    if (row) row.enabled = ev.target.checked;
+    renderSettingsSidebar();
+  });
+}
+
+function setupSettingsConfigForm(detail) {
+  $("#settings-config-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const statusEl = $("#settings-config-save-status");
+    statusEl.textContent = "Saving…";
+    try {
+      await api(`/api/settings/retailers/${detail.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          zip_code: $("#cfg-zip").value.trim(),
+          radius_miles: Number($("#cfg-radius").value),
+          watch_keywords: $("#cfg-keywords").value.trim(),
+          product_list_cache_hours: Number($("#cfg-cache-hours").value),
+        }),
+      });
+      const rawDiscount = $("#cfg-min-discount").value.trim();
+      await api(`/api/settings/retailers/${detail.id}/min-discount`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ min_discount_pct: rawDiscount === "" ? null : Number(rawDiscount) }),
+      });
+      statusEl.textContent = "Saved -- takes effect on the next scan.";
+    } catch (e) {
+      statusEl.textContent = `Save failed: ${e.message}`;
+    }
+  });
+}
+
+function setupSettingsStoreChecks() {
+  $$(".settings-store-check").forEach((el) =>
+    el.addEventListener("change", () => {
+      api(`/api/settings/stores/${el.dataset.storeId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: el.checked }),
+      });
+    })
+  );
+}
+
+function setupSettingsDangerZone(detail) {
+  $("#settings-relist-btn").addEventListener("click", async () => {
+    if (!confirm(`Clear ${detail.display_name}'s product-list cache? The next scan re-lists products from scratch instead of using the cache (slower, more requests to the retailer).`)) return;
+    const statusEl = $("#settings-relist-status");
+    statusEl.textContent = "Resetting…";
+    try {
+      const res = await api(`/api/admin/reset-department-cache?retailer=${encodeURIComponent(detail.slug)}`, { method: "POST" });
+      statusEl.textContent = `Done -- ${res.reset} department(s) will re-list on the next scan.`;
+    } catch (e) {
+      statusEl.textContent = `Failed: ${e.message}`;
+    }
+  });
+}
+
+// Descendant id sets (self excluded) for every department name, built the
+// same deepest-first-fold way common/db.py's get_watched_department_names
+// expands a watched selection -- used here for the tree's indeterminate
+// state and the "products in scope" summary, not for what gets saved
+// (only the raw explicit `selected` set is ever sent to the server).
+function settingsDeptDescendantIdSets(departments) {
+  const byName = new Map(departments.map((d) => [d.name, d]));
+  const childrenByName = new Map();
+  for (const d of departments) {
+    if (d.parent) {
+      if (!childrenByName.has(d.parent)) childrenByName.set(d.parent, []);
+      childrenByName.get(d.parent).push(d.name);
+    }
+  }
+  const result = new Map();
+  [...departments].sort((a, b) => b.depth - a.depth).forEach((d) => {
+    const set = new Set();
+    for (const childName of childrenByName.get(d.name) || []) {
+      const childNode = byName.get(childName);
+      set.add(childNode.id);
+      for (const id of result.get(childName) || []) set.add(id);
+    }
+    result.set(d.name, set);
+  });
+  return result;
+}
+
+function updateSettingsDeptSummary(departments, selected, descendantSets) {
+  const summaryEl = $("#settings-dept-summary");
+  if (!selected.size) {
+    const total = departments.filter((d) => d.depth === 0).reduce((sum, d) => sum + d.count, 0);
+    summaryEl.textContent = `Watching everything · ${total} product${total === 1 ? "" : "s"} in scope`;
+    return;
+  }
+  const byId = new Map(departments.map((d) => [d.id, d]));
+  // Only sum a selected id's count if it isn't already covered by some
+  // OTHER selected id being its ancestor -- each node's own count is
+  // already a rolled-up total including its descendants (see
+  // queries.retailer_department_tree), so counting both would double-count.
+  const topLevel = [...selected].filter((id) =>
+    ![...selected].some((otherId) => otherId !== id && (descendantSets.get(byId.get(otherId)?.name) || new Set()).has(id))
+  );
+  const total = topLevel.reduce((sum, id) => sum + (byId.get(id)?.count || 0), 0);
+  summaryEl.textContent = `${selected.size} selected explicitly · ${total} product${total === 1 ? "" : "s"} in scope incl. sub-departments`;
+}
+
+function setupSettingsDeptTree(detail) {
+  const departments = detail.departments;
+  const retailerId = detail.id;
+  const selected = new Set(departments.filter((d) => d.watched).map((d) => d.id));
+  const descendantSets = settingsDeptDescendantIdSets(departments);
+  const expandKey = (name) => `settings_dept_expanded_${retailerId}_${name}`;
+
+  function render() {
+    const filterText = ($("#settings-dept-filter").value || "").toLowerCase().trim();
+    const byName = new Map(departments.map((d) => [d.name, d]));
+    let visibleNames = null;
+    if (filterText) {
+      visibleNames = new Set(departments.filter((d) => d.label.toLowerCase().includes(filterText)).map((d) => d.name));
+      for (const name of [...visibleNames]) {
+        let p = byName.get(name)?.parent;
+        while (p) { visibleNames.add(p); p = byName.get(p)?.parent; }
+      }
+    }
+    const isCollapsed = (d) => {
+      if (filterText) return false;
+      let p = d.parent;
+      while (p) {
+        if (localStorage.getItem(expandKey(p)) !== "1") return true;
+        p = byName.get(p)?.parent;
+      }
+      return false;
+    };
+
+    const el = $("#settings-dept-tree");
+    el.innerHTML = "";
+    for (const d of departments) {
+      if (visibleNames && !visibleNames.has(d.name)) continue;
+      if (isCollapsed(d)) continue;
+      const hasChildren = departments.some((x) => x.parent === d.name);
+      const expanded = !!filterText || localStorage.getItem(expandKey(d.name)) === "1";
+      const checked = selected.has(d.id);
+      const hasCheckedDescendant = [...(descendantSets.get(d.name) || [])].some((id) => selected.has(id));
+
+      const row = document.createElement("label");
+      row.className = "settings-dept-row";
+      row.style.paddingLeft = `${6 + d.depth * 16}px`;
+      row.innerHTML = `
+        <span class="settings-dept-toggle">${hasChildren ? (expanded ? "▾" : "▸") : ""}</span>
+        <input type="checkbox" class="settings-dept-check" ${checked ? "checked" : ""} />
+        <span class="settings-dept-name">${escapeHtml(d.label)}</span>
+        <span class="settings-dept-count">${d.count}</span>
+      `;
+      if (hasChildren) {
+        row.querySelector(".settings-dept-toggle").addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          localStorage.setItem(expandKey(d.name), expanded ? "0" : "1");
+          render();
+        });
+      }
+      const checkbox = row.querySelector(".settings-dept-check");
+      checkbox.indeterminate = !checked && hasCheckedDescendant;
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selected.add(d.id);
+        else selected.delete(d.id);
+        render();
+      });
+      el.appendChild(row);
+    }
+    updateSettingsDeptSummary(departments, selected, descendantSets);
+  }
+
+  render();
+  $("#settings-dept-filter").addEventListener("input", render);
+  $("#settings-dept-save").addEventListener("click", async () => {
+    const statusEl = $("#settings-dept-save-status");
+    statusEl.textContent = "Saving…";
+    try {
+      await api(`/api/settings/retailers/${retailerId}/departments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ department_ids: [...selected] }),
+      });
+      statusEl.textContent = "Saved -- takes effect on the next scan.";
+    } catch (e) {
+      statusEl.textContent = `Save failed: ${e.message}`;
+    }
+  });
+}
+
+async function renderSettingsNotifications() {
+  const telegram = await api("/api/settings/telegram");
+  $("#settings-main").innerHTML = `
+    <h3>Notifications</h3>
     <dl>
       <dt>Alerts sent</dt><dd>${telegram.alerts_sent}</dd>
       <dt>Last alert</dt><dd>${telegram.last_alert_at ? new Date(telegram.last_alert_at).toLocaleString() : "never"}</dd>
     </dl>
-    ${dataToolsHtml(missing ? missing.missing : null)}
   `;
-  setupScanConfigForm();
-  setupDataTools();
-  setupRetailerMinDiscount();
 }
 
-function setupRetailerMinDiscount() {
-  $$(".retailer-min-discount-save").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const retailerId = btn.dataset.retailer;
-      const input = $(`.retailer-min-discount[data-retailer="${retailerId}"]`);
-      const statusEl = $(`.retailer-min-discount-status[data-retailer="${retailerId}"]`);
-      const raw = input.value.trim();
-      statusEl.textContent = "Saving…";
-      try {
-        await api(`/api/settings/retailers/${retailerId}/min-discount`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ min_discount_pct: raw === "" ? null : Number(raw) }),
-        });
-        statusEl.textContent = raw === "" ? "Saved -- no floor." : "Saved.";
-      } catch (e) {
-        statusEl.textContent = `Failed: ${e.message}`;
-      }
-    })
-  );
+async function renderSettingsDataTools() {
+  const missing = await api("/api/admin/repair-missing-data/count").catch(() => null);
+  $("#settings-main").innerHTML = `<h3>Data tools</h3>${dataToolsHtml(missing ? missing.missing : null)}`;
+  setupDataTools();
 }
 
 function escapeHtml(value) {

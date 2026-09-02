@@ -14,7 +14,6 @@ from scanner.settings import merge_settings, split_list
 ENV_DEFAULTS = {
     "zip_code": "00000",
     "radius_miles": 25.0,
-    "watched_departments": None,
     "watch_keywords": None,
     "product_list_cache_hours": 24.0,
 }
@@ -48,20 +47,20 @@ def test_none_valued_field_in_override_still_falls_back_to_env_default():
     assert settings["radius_miles"] == 5.0
 
 
-def test_watched_departments_override_is_split_like_the_env_var():
-    override_row = {"watched_departments": "Electrical Wire, Plumbing"}
+def test_watch_keywords_override_is_split_like_the_env_var():
+    override_row = {"watch_keywords": "wire, romex"}
 
     settings = merge_settings(ENV_DEFAULTS, override_row)
 
-    assert settings["watched_departments"] == ["Electrical Wire", "Plumbing"]
+    assert settings["watch_keywords"] == ["wire", "romex"]
 
 
-def test_watched_departments_override_can_clear_back_to_scanning_everything():
-    override_row = {"watched_departments": ""}
+def test_watch_keywords_override_can_clear_back_to_matching_everything():
+    override_row = {"watch_keywords": ""}
 
     settings = merge_settings(ENV_DEFAULTS, override_row)
 
-    assert settings["watched_departments"] is None
+    assert settings["watch_keywords"] is None
 
 
 def test_split_list_handles_blank_and_whitespace():

@@ -7,6 +7,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from common import db
+# Re-exported so existing callers (routes/settings.py's queries.build_department_hierarchy)
+# don't need to change -- the implementation moved to common/ so scanner/orchestrator.py
+# can share it too, without depending on this (web-only) module.
+from common.departments import build_department_hierarchy  # noqa: F401
+
 
 def _scope_clauses(
     retailer_slug: str | None = None,
@@ -380,19 +386,6 @@ def recent_backoff(conn) -> list[dict[str, Any]]:
     ).fetchall()
 
 
-def _matches_any(name: str, substrings: list[str] | None) -> bool:
-    # Mirrors scanner/orchestrator.py's helper of the same name -- kept as
-    # its own copy rather than a shared import since the web backend and
-    # scanner are deliberately isolated (see orchestrator.py's module
-    # docstring); this is display-only (department *count* for the Scan
-    # Now dialog), the scanner's copy is the one that actually governs
-    # what gets requested from the retailer.
-    if not substrings:
-        return True
-    lowered = name.lower()
-    return any(s.lower() in lowered for s in substrings)
-
-
 def scan_scope(conn) -> list[dict[str, Any]]:
     """Retailer -> store list for the "Scan Now" dialog (wireframe screen
     4b), with each store's last-radius-search distance and last-scanned
@@ -401,7 +394,13 @@ def scan_scope(conn) -> list[dict[str, Any]]:
     `retailer` row appear -- one that's never been scanned (no adapter
     configured, or configured but never run) isn't listed here at all;
     the frontend treats "retailer has zero stores" as its disabled/
-    "not connected" case."""
+    "not connected" case. Excludes stores disabled in Settings -- the
+    scanner never scans one regardless of what Scan Now sends (see
+    scanner/orchestrator.py's run_scan), so offering a dead checkbox for
+    it here would be misleading; re-enable it in Settings to scan it
+    again. Contrast with queries.retailer_store_list, the Settings panel's
+    own store list, which includes disabled stores so there's something
+    to re-enable."""
     retailers: dict[int, dict[str, Any]] = {
         row["id"]: {"retailer_id": row["id"], "slug": row["slug"], "display_name": row["display_name"], "stores": []}
         for row in conn.execute("SELECT id, slug, display_name FROM retailer ORDER BY display_name").fetchall()
@@ -412,6 +411,7 @@ def scan_scope(conn) -> list[dict[str, Any]]:
                (SELECT max(sr.finished_at) FROM scan_run sr
                 WHERE sr.store_id = s.id AND sr.status = 'completed') AS last_scanned_at
         FROM store s
+        WHERE s.enabled
         ORDER BY s.distance_miles NULLS LAST, s.name
         """
     ).fetchall()
@@ -426,17 +426,18 @@ def scan_scope(conn) -> list[dict[str, Any]]:
     return list(retailers.values())
 
 
-def watched_department_count(conn, retailer_slug: str, watched_departments: list[str] | None) -> int:
-    """How many of this retailer's known departments match the currently
-    configured watch list -- the "N departments" figure in the Scan Now
-    dialog's time estimate and scope summary. Editing which departments
-    are watched is Settings-tab scope (wireframe screen 7), deferred; this
-    only reports the count already in effect."""
-    rows = conn.execute(
-        "SELECT dept.name FROM department dept JOIN retailer r ON r.id = dept.retailer_id WHERE r.slug = %s",
-        (retailer_slug,),
-    ).fetchall()
-    return sum(1 for row in rows if _matches_any(row["name"], watched_departments))
+def retailer_watched_department_count(conn, retailer_id: int) -> int:
+    """How many of this retailer's known departments are in scope for a
+    scan right now -- the "N departments" figure in the Scan Now dialog's
+    time estimate. Delegates to common.db.get_watched_department_names
+    (the same explicit-selection-plus-descendants expansion the scanner
+    itself uses to decide what to request) rather than reimplementing it."""
+    names = db.get_watched_department_names(conn, retailer_id)
+    if names is None:
+        return conn.execute(
+            "SELECT count(*) AS n FROM department WHERE retailer_id = %s", (retailer_id,)
+        ).fetchone()["n"]
+    return len(names)
 
 
 def scan_duration_estimate_seconds(conn) -> float:
@@ -456,70 +457,105 @@ def scan_duration_estimate_seconds(conn) -> float:
 
 
 def list_retailers(conn) -> list[dict[str, Any]]:
-    return conn.execute(
-        "SELECT id, slug, display_name, min_discount_pct FROM retailer ORDER BY display_name"
-    ).fetchall()
-
-
-def list_stores(conn) -> list[dict[str, Any]]:
+    """Settings tab's left nav: every configured retailer with enough to
+    render a summary row (store count, enabled state) without fetching
+    each one's full panel."""
     return conn.execute(
         """
-        SELECT s.id, s.name, s.zip_code, r.slug AS retailer_slug
-        FROM store s JOIN retailer r ON r.id = s.retailer_id
-        ORDER BY r.slug, s.name
-        """
-    ).fetchall()
-
-
-def list_departments(conn) -> list[dict[str, Any]]:
-    return conn.execute(
-        """
-        SELECT dept.id, dept.name, r.slug AS retailer_slug
-        FROM department dept JOIN retailer r ON r.id = dept.retailer_id
-        ORDER BY r.slug, dept.name
+        SELECT r.id, r.slug, r.display_name, r.min_discount_pct, r.enabled,
+               (SELECT count(*) FROM store s WHERE s.retailer_id = r.id) AS store_count
+        FROM retailer r
+        ORDER BY r.display_name
         """
     ).fetchall()
 
 
-def build_department_hierarchy(names: list[str]) -> list[dict[str, Any]]:
-    """Home Depot's own department names are already a full breadcrumb
-    flattened into one space-joined string by its URL scheme (see
-    adapters/home_depot/departments.py) -- "Electrical Batteries AA
-    Batteries" *is* Electrical > Electrical Batteries > AA Batteries, just
-    with no separate parent_department_id populated (orchestrator.py never
-    resolves that -- a "nice to have", per its own comment). Rather than
-    showing the dashboard's department filter as one flat, messy list of
-    concatenated strings, reconstruct the hierarchy here: a child's full
-    name always starts with its parent's full name, so each name's parent
-    is the longest *other* name in the set that's a real word-boundary
-    prefix of it. Returns a parent-before-children ordering with `depth`
-    (for indentation), `label` (the name with its parent's prefix
-    stripped, so each level only shows what's new), and `parent` (the
-    parent's full name, or None for a root -- used by
-    department_tree_with_counts to roll a count up through ancestors).
+def retailer_detail(conn, retailer_id: int) -> dict[str, Any] | None:
+    """Settings panel header: identity + admin enabled flag + auth health
+    (credential_session.status -- written by the scanner on every scan,
+    not surfaced anywhere in the dashboard before this)."""
+    return conn.execute(
+        """
+        SELECT r.id, r.slug, r.display_name, r.enabled, r.adapter_version, r.min_discount_pct,
+               cs.status AS credential_status
+        FROM retailer r
+        LEFT JOIN credential_session cs ON cs.retailer_id = r.id AND cs.session_label = 'default'
+        WHERE r.id = %s
+        """,
+        (retailer_id,),
+    ).fetchone()
 
-    Sort + stack, O(n log n) -- confirmed live 2026-09-01: the original
-    "for each name, scan every other name for the longest prefix match"
-    was O(n^2), 4.3s of a 4.5s request at ~5,200 real department names
-    (every sidebar click re-fetches this). Lexicographic sort already
-    guarantees every name's descendants form a contiguous block
-    immediately after it (a basic property of prefix-sorted strings), so
-    a single pass with a stack of "current ancestor chain" finds each
-    name's immediate parent by popping ancestors that aren't a real
-    prefix of it -- no re-scanning the whole set per name."""
-    unique_names = sorted(set(names))
-    result: list[dict[str, Any]] = []
-    ancestors: list[str] = []  # root-to-current chain of names still "open"
 
-    for name in unique_names:
-        while ancestors and not name.startswith(ancestors[-1] + " "):
-            ancestors.pop()
-        parent = ancestors[-1] if ancestors else None
-        label = name[len(parent) + 1 :] if parent else name
-        result.append({"name": name, "depth": len(ancestors), "label": label, "parent": parent})
-        ancestors.append(name)
+def retailer_store_list(conn, retailer_id: int) -> list[dict[str, Any]]:
+    """Settings panel's "Location & stores" list -- unlike scan_scope
+    (Scan Now dialog), includes disabled stores too, since this is where
+    an admin re-enables one."""
+    return conn.execute(
+        """
+        SELECT s.id AS store_id, s.name, s.retailer_store_id, s.distance_miles, s.enabled,
+               (SELECT max(sr.finished_at) FROM scan_run sr
+                WHERE sr.store_id = s.id AND sr.status = 'completed') AS last_scanned_at
+        FROM store s
+        WHERE s.retailer_id = %s
+        ORDER BY s.distance_miles NULLS LAST, s.name
+        """,
+        (retailer_id,),
+    ).fetchall()
 
-    return result
+
+def retailer_department_tree(conn, retailer_id: int) -> list[dict[str, Any]]:
+    """Settings panel's departments-to-watch checkbox tree -- product
+    catalog size per node, rolled up to ancestors the same way
+    department_tree_with_counts does for the Deals sidebar, but counting
+    `product` rows (catalog size) instead of open `deal` rows (what's
+    currently on sale) -- the two are answering different questions."""
+    dept_rows = conn.execute("SELECT id, name FROM department WHERE retailer_id = %s", (retailer_id,)).fetchall()
+    hierarchy = build_department_hierarchy([r["name"] for r in dept_rows])
+    id_by_name = {r["name"]: r["id"] for r in dept_rows}
+
+    own_counts = {
+        row["name"]: row["product_count"]
+        for row in conn.execute(
+            """
+            SELECT d.name, count(p.id) AS product_count
+            FROM department d
+            LEFT JOIN product p ON p.department_id = d.id
+            WHERE d.retailer_id = %s
+            GROUP BY d.name
+            """,
+            (retailer_id,),
+        ).fetchall()
+    }
+
+    # Deepest first, same rollup technique as department_tree_with_counts:
+    # a parent's own_counts contribution already reflects everything below
+    # it by the time IT gets folded into ITS parent.
+    total_counts = dict(own_counts)
+    for node in sorted(hierarchy, key=lambda n: -n["depth"]):
+        parent = node["parent"]
+        if parent:
+            total_counts[parent] = total_counts.get(parent, 0) + total_counts.get(node["name"], 0)
+
+    return [
+        {
+            "id": id_by_name.get(node["name"]),
+            "name": node["name"], "label": node["label"], "depth": node["depth"], "parent": node["parent"],
+            "count": total_counts.get(node["name"], 0),
+        }
+        for node in hierarchy
+    ]
+
+
+def watched_department_ids(conn, retailer_id: int) -> set[int]:
+    """The raw explicit selection (not descendant-expanded) -- which
+    checkboxes render checked in the Settings tree. Contrast with
+    common.db.get_watched_department_names, which expands to include
+    descendants for scan-time filtering."""
+    rows = conn.execute(
+        "SELECT department_id FROM watched_department WHERE retailer_id = %s", (retailer_id,)
+    ).fetchall()
+    return {r["department_id"] for r in rows}
+
 
 
 def telegram_binding_status(conn) -> dict[str, Any]:

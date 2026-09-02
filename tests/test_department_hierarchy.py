@@ -1,12 +1,12 @@
 """Pure-function tests for reconstructing department hierarchy from Home
 Depot's flattened department names -- no DB involved (see
-web/backend/queries.py:build_department_hierarchy for why this exists)."""
+common/departments.py:build_department_hierarchy for why this exists)."""
 
 from __future__ import annotations
 
 import time
 
-from web.backend.queries import build_department_hierarchy
+from common.departments import build_department_hierarchy
 
 
 def test_single_root_no_children():

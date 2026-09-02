@@ -40,24 +40,21 @@ def scan_scope():
     """Feeds the "Scan Now" dialog (wireframe screen 4b): retailer -> store
     list (with distance/last-scanned) plus a rough per-store-department
     time estimate and the department count currently in scope, so the
-    dialog can compute a live "Estimated ~N min" as checkboxes change."""
+    dialog can compute a live "Estimated ~N min" as checkboxes change.
+    Departments-to-watch now lives in Postgres (watched_department --
+    explicit selection, see common/db.py's get_watched_department_names),
+    not the scanner's env-shaped /config, so this no longer needs to ask
+    the scanner container for it at all."""
     with db.get_connection() as conn:
         retailers = queries.scan_scope(conn)
         avg_seconds = queries.scan_duration_estimate_seconds(conn)
-        watched_departments: list[str] = []
-        try:
-            resp = httpx.get(f"{SCANNER_URL}/config", timeout=5)
-            watched_departments = resp.json().get("watched_departments") or []
-        except httpx.HTTPError:
-            pass
         for retailer in retailers:
-            retailer["watched_department_count"] = queries.watched_department_count(
-                conn, retailer["slug"], watched_departments
+            retailer["watched_department_count"] = queries.retailer_watched_department_count(
+                conn, retailer["retailer_id"]
             )
     return {
         "retailers": retailers,
         "avg_seconds_per_store_department": avg_seconds,
-        "watched_departments": watched_departments,
     }
 
 

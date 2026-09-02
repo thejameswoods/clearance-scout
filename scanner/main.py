@@ -46,7 +46,6 @@ RETAILERS = [s.strip() for s in os.environ.get("RETAILERS", "home_depot").split(
 ENV_DEFAULTS = {
     "zip_code": os.environ["ZIP_CODE"],
     "radius_miles": float(os.environ.get("RADIUS_MILES", "25")),
-    "watched_departments": split_list(os.environ.get("WATCHED_DEPARTMENTS")),
     "watch_keywords": split_list(os.environ.get("WATCH_KEYWORDS")),
     "product_list_cache_hours": float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24")),
 }
@@ -54,15 +53,15 @@ PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
 TRIGGER_PORT = int(os.environ.get("TRIGGER_PORT", "8090"))
 
 
-def _current_settings() -> dict:
+def _current_settings(retailer_id: int) -> dict:
     """Env-var defaults (ENV_DEFAULTS) overlaid with whatever's saved in
-    scanner_settings -- called fresh at the start of every scan and by
-    /config, so a change saved from the dashboard applies to the very
-    next scan, no redeploy."""
+    this retailer's scanner_settings row -- called fresh at the start of
+    every scan and by /config, so a change saved from the dashboard
+    applies to the very next scan, no redeploy."""
     override = None
     try:
         with db.get_connection() as conn:
-            override = db.get_scanner_settings(conn)
+            override = db.get_scanner_settings(conn, retailer_id)
     except Exception:
         logger.exception("Failed to read scanner settings override -- using env-var defaults")
 
@@ -116,13 +115,26 @@ def logs():
 
 
 @app.get("/config")
-def config():
-    # Non-secret runtime config, editable from the dashboard's Settings
-    # tab (see /config PUT below) -- feeds the display so "what is this
-    # actually scanning right now" doesn't require SSHing in and reading
-    # .env by hand (confirmed real friction this session). Nothing here is
-    # a credential; TELEGRAM_BOT_TOKEN etc. never get exposed this way.
-    return {"retailers": RETAILERS, **_current_settings()}
+def config(retailer: str):
+    # Non-secret runtime config for one retailer, editable from the
+    # dashboard's Settings tab (writes go straight to Postgres from the web
+    # backend -- see web/backend/routes/settings.py -- this scanner
+    # container has no write endpoint of its own) -- feeds the display so
+    # "what is this actually scanning right now" doesn't require SSHing in
+    # and reading .env by hand (confirmed real friction this session).
+    # Nothing here is a credential; TELEGRAM_BOT_TOKEN etc. never get
+    # exposed this way. A retailer slug with no DB row yet (never scanned)
+    # falls back to pure env defaults -- nothing's been saved for it either
+    # way.
+    row = None
+    try:
+        with db.get_connection() as conn:
+            row = db.get_retailer_by_slug(conn, retailer)
+    except Exception:
+        logger.exception("Failed to look up retailer %r -- using env-var defaults", retailer)
+
+    settings = _current_settings(row["id"]) if row else merge_settings(ENV_DEFAULTS, None)
+    return {"retailers": RETAILERS, "enabled": row["enabled"] if row else True, **settings}
 
 
 @app.post("/trigger-scan")
@@ -186,8 +198,6 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
     """Returns the (possibly recycled) browser_ctx -- run_scan() may swap
     it out mid-scan (see recycle_browser_ctx), so the caller's own
     reference has to be updated from the result, not assumed unchanged."""
-    settings = _current_settings()  # fresh read -- picks up any dashboard-saved change
-
     with _status_lock:
         _status["last_scan_started_at"] = datetime.now(timezone.utc).isoformat()
         _status["state"] = "scanning"
@@ -201,10 +211,28 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
         adapter = build_adapter(slug)
         try:
             with db.get_connection() as conn:
+                # No row yet == never scanned before -- proceed with pure
+                # env defaults and no restrictions (nothing's been saved
+                # to restrict it with). A row exists but enabled=false ==
+                # deliberately paused in Settings -- skip entirely.
+                retailer_row = db.get_retailer_by_slug(conn, slug)
+                if retailer_row is not None and not retailer_row["enabled"]:
+                    logger.info("%s is disabled in Settings -- skipping", slug)
+                    with _status_lock:
+                        _status["last_scan_result"] = {slug: "disabled"}
+                    continue
+                settings = (
+                    _current_settings(retailer_row["id"]) if retailer_row is not None
+                    else merge_settings(ENV_DEFAULTS, None)
+                )
+                watched_department_names = (
+                    db.get_watched_department_names(conn, retailer_row["id"])
+                    if retailer_row is not None else None
+                )
                 result = run_scan(
                     conn, browser_ctx, adapter, settings["zip_code"], radius_miles=settings["radius_miles"],
                     trigger=trigger, department_filter=department_filter, store_ids=store_ids,
-                    watched_departments=settings["watched_departments"], watch_keywords=settings["watch_keywords"],
+                    watched_department_names=watched_department_names, watch_keywords=settings["watch_keywords"],
                     product_list_cache_hours=settings["product_list_cache_hours"],
                     recycle_browser_ctx=recycle_browser_ctx,
                     on_progress=_on_progress,

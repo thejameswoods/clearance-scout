@@ -17,20 +17,19 @@ def split_list(value: str | None) -> list[str] | None:
 
 
 def merge_settings(env_defaults: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
-    """`override` is a scanner_settings DB row (or None if nothing's ever
-    been saved from the dashboard) -- a field that's present but None
-    within it still means "use the env default" for that field
-    specifically, matching common/db.py's get_scanner_settings docstring,
-    not "use None as the value"."""
+    """`override` is a per-retailer scanner_settings DB row (or None if
+    nothing's ever been saved for this retailer from the dashboard) -- a
+    field that's present but None within it still means "use the env
+    default" for that field specifically, matching common/db.py's
+    get_scanner_settings docstring, not "use None as the value".
+    Departments-to-watch isn't part of this dict -- see
+    common/db.py's get_watched_department_names, resolved separately
+    since it's explicit-selection-based now, not an env-shaped default."""
     override = {k: v for k, v in (override or {}).items() if v is not None}
 
     return {
         "zip_code": override.get("zip_code", env_defaults["zip_code"]),
         "radius_miles": override.get("radius_miles", env_defaults["radius_miles"]),
-        "watched_departments": (
-            split_list(override["watched_departments"]) if "watched_departments" in override
-            else env_defaults["watched_departments"]
-        ),
         "watch_keywords": (
             split_list(override["watch_keywords"]) if "watch_keywords" in override
             else env_defaults["watch_keywords"]

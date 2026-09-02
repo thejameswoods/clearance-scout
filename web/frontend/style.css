@@ -229,8 +229,8 @@ table.deal-table, table.detail-table {
 .shopping-item .name { flex: 1; font-weight: 600; font-size: 0.86rem; }
 .shopping-item .price { font-weight: 700; color: var(--accent); }
 
-#settings-content dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
-#settings-content dt { font-weight: 600; color: var(--text-dim); }
+#settings-main dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+#settings-main dt { font-weight: 600; color: var(--text-dim); }
 
 .settings-form {
   display: flex;
@@ -819,6 +819,59 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 }
 .sn-estimate { font-size: 0.85rem; color: var(--text-dim); }
 .sn-footer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* Settings tab (wireframe screen 7 / 4c) -- like Scan Now, a utility view
+   using base tokens, not the Deals-tab-scoped --dv-* ones (.tree/.tree-row/
+   .sidebar-* redeclare those, so they're not safe to reuse verbatim here). */
+.settings-layout { display: flex; gap: 24px; align-items: flex-start; }
+.settings-sidebar { flex: 0 0 220px; border-right: 1px solid var(--border); padding-right: 16px; }
+.settings-sidebar-section { margin-bottom: 22px; }
+.settings-sidebar-label {
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim); margin-bottom: 6px;
+}
+.settings-tree { display: flex; flex-direction: column; gap: 2px; }
+.settings-tree-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-radius: 6px; cursor: pointer; font-size: 0.88rem;
+}
+.settings-tree-row:hover { background: var(--bg); }
+.settings-tree-row.selected { background: var(--bg); color: var(--accent); font-weight: 600; }
+.settings-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-tree-meta { font-size: 0.76rem; color: var(--text-dim); flex-shrink: 0; }
+.settings-enabled-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.settings-enabled-dot.off { background: var(--border); }
+.settings-main { flex: 1; min-width: 0; }
+
+.settings-panel-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.settings-panel-header h3 { margin: 0; }
+.settings-badge {
+  font-size: 0.76rem; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim);
+}
+.settings-badge.valid { color: var(--green); border-color: var(--green); }
+.settings-badge.needs_login, .settings-badge.expired { color: var(--danger); border-color: var(--danger); }
+.settings-enabled-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.86rem; margin-left: auto; }
+.settings-panel-note { font-size: 0.82rem; color: var(--text-dim); margin: 4px 0 18px; }
+
+.settings-section { margin: 22px 0; }
+.settings-section h4 { margin: 0 0 8px; font-size: 0.9rem; }
+.settings-section-summary { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 8px; }
+
+.settings-store-list { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
+.settings-store-row { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+.settings-store-name { font-weight: 600; }
+.settings-store-meta { font-size: 0.78rem; color: var(--text-dim); }
+
+.settings-dept-filter { max-width: 320px; margin-bottom: 8px; }
+.settings-dept-tree { display: flex; flex-direction: column; max-width: 520px; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 0; }
+.settings-dept-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.86rem; }
+.settings-dept-toggle { width: 14px; flex-shrink: 0; color: var(--text-dim); font-size: 0.76rem; text-align: center; cursor: pointer; }
+.settings-dept-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-dept-count { font-size: 0.78rem; color: var(--text-dim); }
+
+.settings-danger-zone { border: 1px solid var(--danger); border-radius: var(--radius); padding: 14px; max-width: 480px; }
+.settings-danger-zone h4 { margin: 0 0 8px; color: var(--danger); }
 
 .build-footer {
   text-align: center;

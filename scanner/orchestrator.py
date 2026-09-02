@@ -32,7 +32,7 @@ def _matches_any(name: str, substrings: list[str] | None) -> bool:
 
 def _select_departments(
     all_departments: list[Department],
-    watched_departments: list[str] | None,
+    watched_department_names: set[str] | None,
     department_filter: str | None,
 ) -> list[Department]:
     if department_filter:
@@ -40,7 +40,9 @@ def _select_departments(
         # <department>") is a manual override — it applies even to a
         # department outside the configured watch list.
         return [d for d in all_departments if d.retailer_department_id == department_filter]
-    return [d for d in all_departments if _matches_any(d.name, watched_departments)]
+    if watched_department_names is None:
+        return list(all_departments)
+    return [d for d in all_departments if d.name in watched_department_names]
 
 
 def run_scan(
@@ -52,7 +54,7 @@ def run_scan(
     trigger: str = "scheduled",
     department_filter: str | None = None,
     store_ids: list[str] | None = None,
-    watched_departments: list[str] | None = None,
+    watched_department_names: set[str] | None = None,
     watch_keywords: list[str] | None = None,
     product_list_cache_hours: float = 24.0,
     recycle_browser_ctx: Callable[[object], object] | None = None,
@@ -62,18 +64,29 @@ def run_scan(
     products -> prices) for one retailer, writing results to Postgres as it
     goes so a mid-scan crash doesn't lose everything already checked.
 
-    `watched_departments` / `watch_keywords` narrow what actually gets
-    requested from the retailer (fewer departments listed, fewer products
-    price-checked) — not just what the dashboard displays afterward. Both
-    are case-insensitive substring matches; leave unset to scan everything
-    (the original, unfiltered behavior).
+    `watched_department_names` narrows which departments get requested from
+    the retailer at all (fewer departments listed, fewer products
+    price-checked) — not just what the dashboard displays afterward.
+    Already-expanded to include descendants of an explicitly-watched
+    department (see common/db.py's get_watched_department_names, the
+    caller that normally produces this set); `None` means nothing's
+    explicitly watched, i.e. scan every department (the original,
+    unfiltered default). `watch_keywords` is a separate, still
+    substring-based narrowing by product name within whatever departments
+    that leaves.
 
-    `store_ids`: restricts the scan to just these `StoreInfo.retailer_store_id`
-    values out of what `find_stores()` returns, e.g. the dashboard's "Scan
-    Now" dialog scoping to a hand-picked subset of stores. A store left out
-    isn't upserted on this run either, so its `store` row (distance/name/
-    address) only refreshes on a scan that does include it. None (the
-    default) scans every discovered store, the original behavior.
+    `store_ids`: which of `find_stores()`'s discovered stores actually get
+    price-checked this run, layered on top of a standing exclusion that
+    always applies regardless of this parameter: a store an admin has
+    disabled in Settings (`db.get_disabled_store_ids`) is never scanned,
+    full stop -- not by a redeploy, not by an explicit selection. Within
+    what's left, `None` (the default) means every enabled store; an
+    explicit list (e.g. the dashboard's "Scan Now" dialog scoping to a
+    hand-picked subset) narrows further. Either way, every discovered
+    store still gets `db.upsert_store`'d regardless of whether it ends up
+    scanned this run -- only the price-check phase is skipped for one
+    outside scope, so its `store` row (distance/name/address) stays
+    current either way.
 
     `product_list_cache_hours`: phase 2 (which products exist in a
     department) is request-heavy (multiple paginated calls per department)
@@ -124,8 +137,6 @@ def run_scan(
     db.set_credential_session_status(conn, retailer_id, "valid")
 
     stores = list(adapter.find_stores(browser_ctx, zip_code, radius_miles))
-    if store_ids:
-        stores = [s for s in stores if s.retailer_store_id in store_ids]
     # Progress logging below is deliberately checkpoint-based (store,
     # department, and a periodic heartbeat during price checks), not
     # per-item -- confirmed live 2026-08-31 the orchestrator previously
@@ -143,7 +154,7 @@ def run_scan(
     # 14-store scan) for identical results every time.
     scan_run_id = db.start_scan_run(conn, retailer_id, None, "departments", trigger)
     all_departments = list(adapter.discover_departments(browser_ctx))
-    departments = _select_departments(all_departments, watched_departments, department_filter)
+    departments = _select_departments(all_departments, watched_department_names, department_filter)
     db.finish_scan_run(conn, scan_run_id, "completed", 0, 0)
     logger.info(
         "%d department(s) discovered, %d match the watch list",
@@ -158,6 +169,20 @@ def run_scan(
         for department in departments
     }
 
+    # Settings-disabled is a standing exclusion, resolved fresh here so an
+    # admin's toggle takes effect on the very next scan (no redeploy) --
+    # applies regardless of store_ids, so an explicit Scan Now selection
+    # can only narrow *within* what's enabled, never resurrect a disabled
+    # store. A brand-new store (no `store` row yet, e.g. this retailer's
+    # first-ever scan) is correctly left out of the disabled set -- it can
+    # only end up there once it exists to be disabled.
+    disabled_store_ids = db.get_disabled_store_ids(conn, retailer_id)
+    scan_targets = [
+        s for s in stores
+        if s.retailer_store_id not in disabled_store_ids
+        and (store_ids is None or s.retailer_store_id in store_ids)
+    ]
+
     stores_scanned = 0
     departments_scanned = 0
     products_checked = 0
@@ -165,18 +190,26 @@ def run_scan(
     new_deal_ids: list[int] = []
 
     for store_info in stores:
-        adapter.select_store(browser_ctx, store_info)
-        browser_ctx.clearance_scout_store_id = store_info.retailer_store_id
+        # Every discovered store gets its row kept current regardless of
+        # whether it's actually scanned this run -- distance/name/address
+        # would otherwise only refresh on a run that happens to include it.
         store_id = db.upsert_store(
             conn, retailer_id, store_info.retailer_store_id, store_info.zip_code,
             store_info.name, store_info.address, store_info.distance_miles,
         )
+        if store_info.retailer_store_id in disabled_store_ids:
+            continue  # disabled in Settings -- standing exclusion, always applies
+        if store_ids is not None and store_info.retailer_store_id not in store_ids:
+            continue  # outside this run's explicit scope (e.g. Scan Now)
+
+        adapter.select_store(browser_ctx, store_info)
+        browser_ctx.clearance_scout_store_id = store_info.retailer_store_id
         stores_scanned += 1
         store_departments_scanned = 0
         logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
         _progress(
             phase="store", store=store_info.name or store_info.retailer_store_id,
-            store_index=stores_scanned, stores_total=len(stores),
+            store_index=stores_scanned, stores_total=len(scan_targets),
             products_checked=products_checked, errors_count=errors_count,
         )
 

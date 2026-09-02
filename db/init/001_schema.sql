@@ -13,7 +13,11 @@ CREATE TABLE retailer (
     -- 2026-09-01: without one, real-but-marginal 10%-off "clearance"
     -- buries the deals actually worth a trip. An explicit min_discount_pct
     -- filter on a request overrides this per-request, doesn't stack with it.
-    min_discount_pct  DOUBLE PRECISION
+    min_discount_pct  DOUBLE PRECISION,
+    -- Admin on/off (Settings tab) -- independent of credential_session.status
+    -- (auth health). A disabled retailer is skipped by the scanner's main
+    -- loop entirely, without an env change/redeploy.
+    enabled           BOOLEAN NOT NULL DEFAULT true
 );
 
 CREATE TABLE store (
@@ -29,6 +33,11 @@ CREATE TABLE store (
     -- Refreshed on every scan that store appears in; stale between scans,
     -- same as name/address.
     distance_miles     DOUBLE PRECISION,
+    -- Admin on/off (Settings tab) -- excluded from every scan while false.
+    -- Deliberately absent from upsert_store's ON CONFLICT DO UPDATE SET (see
+    -- common/db.py) so a routine re-upsert never clobbers this choice; only
+    -- a brand-new store row gets the default below.
+    enabled            BOOLEAN NOT NULL DEFAULT true,
     UNIQUE (retailer_id, retailer_store_id)
 );
 
@@ -158,17 +167,30 @@ CREATE TABLE credential_session (
 );
 
 -- Editable overrides for the scanner's env-var config -- lets the
--- dashboard change ZIP/radius/watch filters without a redeploy. Single row
--- (id always 1); NULL means "no override, use the env var default" for
--- that field specifically, not "use NULL as the value" -- see
--- common/db.py's get_scanner_settings/upsert_scanner_settings and
--- scanner/main.py's _current_settings for how env + this table merge.
+-- dashboard change ZIP/radius/watch filters without a redeploy, per
+-- retailer. NULL means "no override, use the env var default" for that
+-- field specifically, not "use NULL as the value" -- see common/db.py's
+-- get_scanner_settings/upsert_scanner_settings and scanner/main.py's
+-- _current_settings for how env + this table merge. Departments-to-watch
+-- lives in watched_department below, not here -- explicit selection,
+-- not a flat substring-match string.
 CREATE TABLE scanner_settings (
-    id                       INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    retailer_id              INTEGER PRIMARY KEY REFERENCES retailer(id) ON DELETE CASCADE,
     zip_code                 TEXT,
     radius_miles             DOUBLE PRECISION,
-    watched_departments      TEXT,  -- comma-separated, same format as the env var
     watch_keywords           TEXT,
     product_list_cache_hours DOUBLE PRECISION,
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Explicit departments-to-watch selection (Settings checkbox tree). A row
+-- means "this department, and everything under it, is watched" -- the same
+-- descendant-inclusion rule as the Deals-tab scope bar's "incl.
+-- sub-departments" toggle. No rows for a retailer means "watch everything"
+-- (unchanged default from the old flat watched_departments field). See
+-- common/db.py's get_watched_department_names for the descendant expansion.
+CREATE TABLE watched_department (
+    retailer_id    INTEGER NOT NULL REFERENCES retailer(id) ON DELETE CASCADE,
+    department_id  INTEGER NOT NULL REFERENCES department(id) ON DELETE CASCADE,
+    PRIMARY KEY (retailer_id, department_id)
 );
