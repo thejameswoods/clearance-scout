@@ -28,7 +28,6 @@ class ScanConfigUpdate(BaseModel):
     radius_miles: float | None = None
     watched_departments: str | None = None
     watch_keywords: str | None = None
-    scan_interval_minutes: float | None = None
     product_list_cache_hours: float | None = None
 
 

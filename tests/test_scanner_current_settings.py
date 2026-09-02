@@ -16,7 +16,6 @@ ENV_DEFAULTS = {
     "radius_miles": 25.0,
     "watched_departments": None,
     "watch_keywords": None,
-    "scan_interval_minutes": 240.0,
     "product_list_cache_hours": 24.0,
 }
 
@@ -34,7 +33,7 @@ def test_saved_override_wins_over_env_default():
     assert settings["zip_code"] == "90210"
     assert settings["radius_miles"] == 5.0
     # Fields absent from the override row still fall back to env defaults.
-    assert settings["scan_interval_minutes"] == 240.0
+    assert settings["product_list_cache_hours"] == 24.0
 
 
 def test_none_valued_field_in_override_still_falls_back_to_env_default():

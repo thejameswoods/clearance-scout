@@ -46,7 +46,6 @@ directly. Alerts arrive automatically as new deals are found.
 | `RADIUS_MILES` | `25` | How far from `ZIP_CODE` to look for stores — every store in range gets scanned |
 | `WATCHED_DEPARTMENTS` | blank (all) | Comma-separated, case-insensitive substrings — only matching departments are scanned at all |
 | `WATCH_KEYWORDS` | blank (all) | Further narrows by product name within watched departments |
-| `SCAN_INTERVAL_MINUTES` | `240` | How often a scheduled scan runs |
 | `RETAILERS` | `home_depot` | Comma-separated adapter slugs to run |
 
 Edit `.env`, then `docker compose up -d scanner` (or `web`/`bot`, if those

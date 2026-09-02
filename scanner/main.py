@@ -48,14 +48,6 @@ ENV_DEFAULTS = {
     "radius_miles": float(os.environ.get("RADIUS_MILES", "25")),
     "watched_departments": split_list(os.environ.get("WATCHED_DEPARTMENTS")),
     "watch_keywords": split_list(os.environ.get("WATCH_KEYWORDS")),
-    # <= 0 disables the scheduled recurring scan entirely -- "Scan now"
-    # (dashboard/bot) still works. Confirmed live 2026-09-01: the 4h
-    # interval auto-retriggered a scan mid-development, on a container
-    # whose memory hadn't recovered from the previous run, straight into
-    # the same multi-hour timeout/degradation issue (GitHub issue #4) it
-    # was already fighting. Useful default for production; actively
-    # unhelpful while iterating or investigating a specific problem.
-    "scan_interval_minutes": float(os.environ.get("SCAN_INTERVAL_MINUTES", "240")),
     "product_list_cache_hours": float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24")),
 }
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
@@ -350,8 +342,6 @@ def main() -> None:
             return _launch_browser_ctx(playwright)
 
         while True:
-            settings = _current_settings()  # fresh each cycle -- see that function's docstring
-            department_filter = None
             if _refresh_queue:
                 # Ahead of repair/scan -- a single-item refresh is small,
                 # quick, and directly user-initiated ("I'm looking at this
@@ -374,25 +364,13 @@ def main() -> None:
                     recycle_browser_ctx=recycle_browser_ctx,
                 )
             else:
-                browser_ctx = _scan_all(
-                    browser_ctx, trigger="scheduled", department_filter=None,
-                    recycle_browser_ctx=recycle_browser_ctx,
-                )
-
-            if settings["scan_interval_minutes"] <= 0:
-                # Scheduled auto-rescan disabled -- wait indefinitely for a
-                # manual trigger (dashboard "Scan now" / bot /scan), a
-                # repair trigger, or a queued refresh.
-                while not (_trigger_event.is_set() or _repair_trigger_event.is_set() or _refresh_queue):
-                    time.sleep(5)
-                continue
-
-            # Sleep in short increments so a trigger during the wait is
-            # picked up promptly instead of after the full interval.
-            deadline = time.monotonic() + settings["scan_interval_minutes"] * 60
-            while time.monotonic() < deadline:
-                if _trigger_event.is_set() or _repair_trigger_event.is_set() or _refresh_queue:
-                    break
+                # No automatic scanning -- not on a timer, not on
+                # container start. A scan is a heavy operation that makes
+                # real requests against the retailer; it only ever runs
+                # because a human asked for it (dashboard "Scan now" / bot
+                # /scan). Idle and poll for the next trigger.
+                with _status_lock:
+                    _status["state"] = "idle"
                 time.sleep(5)
 
 

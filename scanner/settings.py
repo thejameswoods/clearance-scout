@@ -35,7 +35,6 @@ def merge_settings(env_defaults: dict[str, Any], override: dict[str, Any] | None
             split_list(override["watch_keywords"]) if "watch_keywords" in override
             else env_defaults["watch_keywords"]
         ),
-        "scan_interval_minutes": override.get("scan_interval_minutes", env_defaults["scan_interval_minutes"]),
         "product_list_cache_hours": override.get(
             "product_list_cache_hours", env_defaults["product_list_cache_hours"]
         ),

@@ -1030,7 +1030,6 @@ function scanConfigFormHtml(scanConfig) {
       <label>Radius (miles) <input type="number" id="cfg-radius" min="1" step="0.5" value="${scanConfig.radius_miles ?? ""}" required></label>
       <label>Watched departments <input type="text" id="cfg-departments" placeholder="blank = all departments" value="${escapeHtml(joined(scanConfig.watched_departments))}"></label>
       <label>Watch keywords <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml(joined(scanConfig.watch_keywords))}"></label>
-      <label>Scan interval (min, 0 = manual only) <input type="number" id="cfg-interval" min="0" step="1" value="${scanConfig.scan_interval_minutes ?? ""}"></label>
       <label>Product list cache (hours) <input type="number" id="cfg-cache-hours" min="0" step="1" value="${scanConfig.product_list_cache_hours ?? ""}"></label>
       <div class="modal-actions">
         <button type="submit">Save</button>
@@ -1056,7 +1055,6 @@ function setupScanConfigForm() {
           radius_miles: Number($("#cfg-radius").value),
           watched_departments: $("#cfg-departments").value.trim(),
           watch_keywords: $("#cfg-keywords").value.trim(),
-          scan_interval_minutes: Number($("#cfg-interval").value),
           product_list_cache_hours: Number($("#cfg-cache-hours").value),
         }),
       });
