@@ -51,6 +51,7 @@ def run_scan(
     radius_miles: float = 25.0,
     trigger: str = "scheduled",
     department_filter: str | None = None,
+    store_ids: list[str] | None = None,
     watched_departments: list[str] | None = None,
     watch_keywords: list[str] | None = None,
     product_list_cache_hours: float = 24.0,
@@ -66,6 +67,13 @@ def run_scan(
     price-checked) — not just what the dashboard displays afterward. Both
     are case-insensitive substring matches; leave unset to scan everything
     (the original, unfiltered behavior).
+
+    `store_ids`: restricts the scan to just these `StoreInfo.retailer_store_id`
+    values out of what `find_stores()` returns, e.g. the dashboard's "Scan
+    Now" dialog scoping to a hand-picked subset of stores. A store left out
+    isn't upserted on this run either, so its `store` row (distance/name/
+    address) only refreshes on a scan that does include it. None (the
+    default) scans every discovered store, the original behavior.
 
     `product_list_cache_hours`: phase 2 (which products exist in a
     department) is request-heavy (multiple paginated calls per department)
@@ -116,6 +124,8 @@ def run_scan(
     db.set_credential_session_status(conn, retailer_id, "valid")
 
     stores = list(adapter.find_stores(browser_ctx, zip_code, radius_miles))
+    if store_ids:
+        stores = [s for s in stores if s.retailer_store_id in store_ids]
     # Progress logging below is deliberately checkpoint-based (store,
     # department, and a periodic heartbeat during price checks), not
     # per-item -- confirmed live 2026-08-31 the orchestrator previously
@@ -159,7 +169,7 @@ def run_scan(
         browser_ctx.clearance_scout_store_id = store_info.retailer_store_id
         store_id = db.upsert_store(
             conn, retailer_id, store_info.retailer_store_id, store_info.zip_code,
-            store_info.name, store_info.address,
+            store_info.name, store_info.address, store_info.distance_miles,
         )
         stores_scanned += 1
         store_departments_scanned = 0

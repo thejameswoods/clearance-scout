@@ -23,6 +23,12 @@ CREATE TABLE store (
     zip_code           TEXT NOT NULL,
     name               TEXT,
     address            TEXT,
+    -- From the adapter's find_stores() radius search -- not persisted
+    -- before this, so it was lost by the time anything outside a live scan
+    -- (e.g. the Scan Now dialog) wanted to show "6 mi" next to a store.
+    -- Refreshed on every scan that store appears in; stale between scans,
+    -- same as name/address.
+    distance_miles     DOUBLE PRECISION,
     UNIQUE (retailer_id, retailer_store_id)
 );
 

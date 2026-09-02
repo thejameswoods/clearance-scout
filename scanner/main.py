@@ -89,6 +89,7 @@ def _current_settings() -> dict:
 
 _trigger_event = threading.Event()
 _trigger_department: str | None = None
+_trigger_store_ids: list[str] | None = None
 _status_lock = threading.Lock()
 _status = {"last_scan_started_at": None, "last_scan_result": None, "state": "starting"}
 # Live checkpoint progress (store/department/counts) for the in-progress
@@ -144,9 +145,10 @@ def config():
 
 
 @app.post("/trigger-scan")
-def trigger_scan(department: str | None = None):
-    global _trigger_department
+def trigger_scan(department: str | None = None, store_ids: list[str] | None = None):
+    global _trigger_department, _trigger_store_ids
     _trigger_department = department
+    _trigger_store_ids = store_ids
     _trigger_event.set()
     return {"triggered": True}
 
@@ -199,7 +201,7 @@ def _run_http_server():
     server.run()
 
 
-def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_browser_ctx):
+def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_browser_ctx, store_ids: list[str] | None = None):
     """Returns the (possibly recycled) browser_ctx -- run_scan() may swap
     it out mid-scan (see recycle_browser_ctx), so the caller's own
     reference has to be updated from the result, not assumed unchanged."""
@@ -220,7 +222,7 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
             with db.get_connection() as conn:
                 result = run_scan(
                     conn, browser_ctx, adapter, settings["zip_code"], radius_miles=settings["radius_miles"],
-                    trigger=trigger, department_filter=department_filter,
+                    trigger=trigger, department_filter=department_filter, store_ids=store_ids,
                     watched_departments=settings["watched_departments"], watch_keywords=settings["watch_keywords"],
                     product_list_cache_hours=settings["product_list_cache_hours"],
                     recycle_browser_ctx=recycle_browser_ctx,
@@ -377,9 +379,10 @@ def main() -> None:
                 browser_ctx = _repair_all(browser_ctx, limit)
             elif _trigger_event.is_set():
                 department_filter = _trigger_department
+                store_ids = _trigger_store_ids
                 _trigger_event.clear()
                 browser_ctx = _scan_all(
-                    browser_ctx, trigger="manual", department_filter=department_filter,
+                    browser_ctx, trigger="manual", department_filter=department_filter, store_ids=store_ids,
                     recycle_browser_ctx=recycle_browser_ctx,
                 )
             elif first_iteration and not settings["scan_on_startup"]:

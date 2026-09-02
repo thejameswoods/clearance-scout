@@ -35,14 +35,56 @@ def scan_status():
     }
 
 
+@router.get("/scope")
+def scan_scope():
+    """Feeds the "Scan Now" dialog (wireframe screen 4b): retailer -> store
+    list (with distance/last-scanned) plus a rough per-store-department
+    time estimate and the department count currently in scope, so the
+    dialog can compute a live "Estimated ~N min" as checkboxes change."""
+    with db.get_connection() as conn:
+        retailers = queries.scan_scope(conn)
+        avg_seconds = queries.scan_duration_estimate_seconds(conn)
+        watched_departments: list[str] = []
+        try:
+            resp = httpx.get(f"{SCANNER_URL}/config", timeout=5)
+            watched_departments = resp.json().get("watched_departments") or []
+        except httpx.HTTPError:
+            pass
+        for retailer in retailers:
+            retailer["watched_department_count"] = queries.watched_department_count(
+                conn, retailer["slug"], watched_departments
+            )
+    return {
+        "retailers": retailers,
+        "avg_seconds_per_store_department": avg_seconds,
+        "watched_departments": watched_departments,
+    }
+
+
 @router.post("/trigger")
-def trigger_scan(department: str | None = None):
+def trigger_scan(department: str | None = None, store_ids: list[int] | None = None):
+    # store_ids from the dashboard are DB store.id values (what every other
+    # store-scoped endpoint in this API uses) -- translate to the
+    # retailer_store_id strings the scanner/orchestrator actually filters
+    # on before forwarding.
+    retailer_store_ids: list[str] | None = None
+    if store_ids:
+        with db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT retailer_store_id FROM store WHERE id = ANY(%s)", (store_ids,)
+            ).fetchall()
+        retailer_store_ids = [r["retailer_store_id"] for r in rows]
+        if not retailer_store_ids:
+            return {"triggered": False, "error": "none of the given store_ids were found"}
+
+    params: list[tuple[str, str]] = []
+    if department:
+        params.append(("department", department))
+    if retailer_store_ids:
+        params.extend(("store_ids", sid) for sid in retailer_store_ids)
+
     try:
-        resp = httpx.post(
-            f"{SCANNER_URL}/trigger-scan",
-            params={"department": department} if department else {},
-            timeout=5,
-        )
+        resp = httpx.post(f"{SCANNER_URL}/trigger-scan", params=params, timeout=5)
         return resp.json()
     except httpx.HTTPError as exc:
         return {"triggered": False, "error": str(exc)}

@@ -796,6 +796,30 @@ main:has(#tab-deals.active) { max-width: 1400px; }
 }
 .pd-store-card .add-store-btn:hover { border-color: var(--dv-accent); color: var(--dv-accent-dark); }
 
+/* Scan Now dialog (wireframe screen 4b) -- a utility dialog, not
+   Deals-tab-themed, so it uses the base --text/--border/--accent tokens
+   (available everywhere) rather than the --dv-* ones .pd-detail redeclares
+   (only meaningful for a Deals-flavored view). */
+.modal-content.scan-now-detail { max-width: 560px; }
+.sn-retailers { display: flex; flex-direction: column; gap: 16px; margin-top: 14px; }
+.sn-retailer { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.sn-retailer-disabled { opacity: 0.6; }
+.sn-not-connected { margin: 6px 0 0; font-size: 0.85rem; color: var(--text-dim); }
+.sn-retailer-header { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.sn-count { margin-left: auto; font-size: 0.8rem; color: var(--text-dim); }
+.sn-stores { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0 24px; }
+.sn-store-row { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; cursor: pointer; }
+.sn-store-name { font-weight: 600; }
+.sn-store-meta { font-size: 0.8rem; color: var(--text-dim); }
+.sn-dept-scope { margin: 10px 0 0 24px; font-size: 0.8rem; color: var(--text-dim); }
+.sn-dept-scope a { color: var(--accent); }
+.sn-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.sn-estimate { font-size: 0.85rem; color: var(--text-dim); }
+.sn-footer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
 .build-footer {
   text-align: center;
   padding: 10px;

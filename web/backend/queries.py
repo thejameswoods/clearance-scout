@@ -380,6 +380,81 @@ def recent_backoff(conn) -> list[dict[str, Any]]:
     ).fetchall()
 
 
+def _matches_any(name: str, substrings: list[str] | None) -> bool:
+    # Mirrors scanner/orchestrator.py's helper of the same name -- kept as
+    # its own copy rather than a shared import since the web backend and
+    # scanner are deliberately isolated (see orchestrator.py's module
+    # docstring); this is display-only (department *count* for the Scan
+    # Now dialog), the scanner's copy is the one that actually governs
+    # what gets requested from the retailer.
+    if not substrings:
+        return True
+    lowered = name.lower()
+    return any(s.lower() in lowered for s in substrings)
+
+
+def scan_scope(conn) -> list[dict[str, Any]]:
+    """Retailer -> store list for the "Scan Now" dialog (wireframe screen
+    4b), with each store's last-radius-search distance and last-scanned
+    time so the dialog can show "Chapel Hill #3612 · 6 mi · scanned 2h
+    ago" without a live browser lookup. Only retailers with at least one
+    `retailer` row appear -- one that's never been scanned (no adapter
+    configured, or configured but never run) isn't listed here at all;
+    the frontend treats "retailer has zero stores" as its disabled/
+    "not connected" case."""
+    retailers: dict[int, dict[str, Any]] = {
+        row["id"]: {"retailer_id": row["id"], "slug": row["slug"], "display_name": row["display_name"], "stores": []}
+        for row in conn.execute("SELECT id, slug, display_name FROM retailer ORDER BY display_name").fetchall()
+    }
+    stores = conn.execute(
+        """
+        SELECT s.retailer_id, s.id AS store_id, s.name, s.retailer_store_id, s.distance_miles,
+               (SELECT max(sr.finished_at) FROM scan_run sr
+                WHERE sr.store_id = s.id AND sr.status = 'completed') AS last_scanned_at
+        FROM store s
+        ORDER BY s.distance_miles NULLS LAST, s.name
+        """
+    ).fetchall()
+    for row in stores:
+        retailer = retailers.get(row["retailer_id"])
+        if not retailer:
+            continue
+        retailer["stores"].append({
+            "store_id": row["store_id"], "name": row["name"], "retailer_store_id": row["retailer_store_id"],
+            "distance_miles": row["distance_miles"], "last_scanned_at": row["last_scanned_at"],
+        })
+    return list(retailers.values())
+
+
+def watched_department_count(conn, retailer_slug: str, watched_departments: list[str] | None) -> int:
+    """How many of this retailer's known departments match the currently
+    configured watch list -- the "N departments" figure in the Scan Now
+    dialog's time estimate and scope summary. Editing which departments
+    are watched is Settings-tab scope (wireframe screen 7), deferred; this
+    only reports the count already in effect."""
+    rows = conn.execute(
+        "SELECT dept.name FROM department dept JOIN retailer r ON r.id = dept.retailer_id WHERE r.slug = %s",
+        (retailer_slug,),
+    ).fetchall()
+    return sum(1 for row in rows if _matches_any(row["name"], watched_departments))
+
+
+def scan_duration_estimate_seconds(conn) -> float:
+    """Rough per-store-per-department duration, averaged from this
+    scanner's own scan_run history (phase='prices', completed runs) --
+    "a rough constant is fine to start" per the handoff doc, but real
+    history beats a guessed number once there's any to average. Falls
+    back to a flat guess when there's no history yet (fresh install)."""
+    row = conn.execute(
+        """
+        SELECT avg(extract(epoch FROM (finished_at - started_at))) AS avg_seconds
+        FROM scan_run
+        WHERE phase = 'prices' AND status = 'completed' AND finished_at IS NOT NULL
+        """
+    ).fetchone()
+    return float(row["avg_seconds"]) if row and row["avg_seconds"] else 45.0
+
+
 def list_retailers(conn) -> list[dict[str, Any]]:
     return conn.execute(
         "SELECT id, slug, display_name, min_discount_pct FROM retailer ORDER BY display_name"

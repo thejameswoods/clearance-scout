@@ -51,16 +51,17 @@ def set_retailer_min_discount_pct(conn, retailer_id: int, min_discount_pct: floa
 
 
 def upsert_store(conn, retailer_id: int, retailer_store_id: str, zip_code: str,
-                  name: str | None, address: str | None) -> int:
+                  name: str | None, address: str | None, distance_miles: float | None = None) -> int:
     row = conn.execute(
         """
-        INSERT INTO store (retailer_id, retailer_store_id, zip_code, name, address)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO store (retailer_id, retailer_store_id, zip_code, name, address, distance_miles)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (retailer_id, retailer_store_id)
-        DO UPDATE SET zip_code = EXCLUDED.zip_code, name = EXCLUDED.name, address = EXCLUDED.address
+        DO UPDATE SET zip_code = EXCLUDED.zip_code, name = EXCLUDED.name, address = EXCLUDED.address,
+                      distance_miles = EXCLUDED.distance_miles
         RETURNING id
         """,
-        (retailer_id, retailer_store_id, zip_code, name, address),
+        (retailer_id, retailer_store_id, zip_code, name, address, distance_miles),
     ).fetchone()
     return row["id"]
 

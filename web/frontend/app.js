@@ -594,6 +594,16 @@ function productDetailStoreCardHtml(r, cheapestDealId) {
   `;
 }
 
+// The shared modal shell (#deal-modal/.modal-content/#modal-body) is reused
+// by three unrelated openers (product detail, history-tab deal, Scan Now) --
+// each toggles its own sizing/theme modifier class on/off, so every opener
+// must clear the others' first or a leftover class leaks its layout into a
+// shape it wasn't designed for.
+const MODAL_MODIFIER_CLASSES = ["pd-detail", "scan-now-detail"];
+function resetModalModifierClasses() {
+  document.querySelector("#deal-modal .modal-content")?.classList.remove(...MODAL_MODIFIER_CLASSES);
+}
+
 function openProductDetail(productId) {
   const rows = window._dealGroups?.get(productId);
   if (!rows) return;
@@ -607,6 +617,7 @@ function openProductDetail(productId) {
     .map((seg, i) => (i === breadcrumb.length - 1 ? `<strong>${escapeHtml(seg)}</strong>` : escapeHtml(seg)))
     .join(" / ");
 
+  resetModalModifierClasses();
   const modalContent = document.querySelector("#deal-modal .modal-content");
   modalContent.classList.add("pd-detail");
   const body = $("#modal-body");
@@ -746,7 +757,7 @@ async function loadHistory() {
 
 async function openDeal(dealId) {
   const d = await api(`/api/deals/${dealId}`);
-  document.querySelector("#deal-modal .modal-content")?.classList.remove("pd-detail");
+  resetModalModifierClasses();
   const body = $("#modal-body");
   const historyRows = d.price_history
     .map(
@@ -1247,6 +1258,159 @@ async function loadLogs() {
   }
 }
 
+// --- Scan Now dialog (wireframe screen 4b): pick a subset of stores to
+// scan instead of always scanning everything. Reuses the shared modal
+// shell (see resetModalModifierClasses above); state (which stores are
+// checked) lives in window._scanNowSelected, rebuilt fresh each time the
+// dialog opens rather than persisted across opens.
+
+function scanNowStoreRowHtml(store, checked) {
+  const distance = store.distance_miles != null ? `${store.distance_miles.toFixed(1)} mi` : "distance unknown";
+  const scanned = store.last_scanned_at ? `scanned ${relTime(store.last_scanned_at)}` : "never scanned";
+  return `
+    <label class="sn-store-row">
+      <input type="checkbox" class="sn-store-check" data-store-id="${store.store_id}" ${checked ? "checked" : ""} />
+      <span class="sn-store-name">${escapeHtml(store.name || store.retailer_store_id)}</span>
+      <span class="sn-store-meta">${distance} · ${scanned}</span>
+    </label>
+  `;
+}
+
+function scanNowRetailerBlockHtml(retailer) {
+  if (!retailer.stores.length) {
+    return `
+      <div class="sn-retailer sn-retailer-disabled">
+        <div class="sn-retailer-header"><strong>${escapeHtml(retailer.display_name)}</strong></div>
+        <p class="sn-not-connected">Not connected — add in Settings.</p>
+      </div>
+    `;
+  }
+  const selectedCount = retailer.stores.filter((s) => window._scanNowSelected.has(s.store_id)).length;
+  const allChecked = selectedCount === retailer.stores.length;
+  const deptLabel = `${retailer.watched_department_count} department${retailer.watched_department_count === 1 ? "" : "s"} watched`;
+  return `
+    <div class="sn-retailer" data-retailer-id="${retailer.retailer_id}">
+      <label class="sn-retailer-header">
+        <input type="checkbox" class="sn-retailer-all" data-retailer-id="${retailer.retailer_id}" ${allChecked ? "checked" : ""} />
+        <strong>${escapeHtml(retailer.display_name)}</strong>
+        <span class="sn-count">${selectedCount} of ${retailer.stores.length} stores selected</span>
+      </label>
+      <div class="sn-stores">
+        ${retailer.stores.map((s) => scanNowStoreRowHtml(s, window._scanNowSelected.has(s.store_id))).join("")}
+      </div>
+      <div class="sn-dept-scope">
+        ${deptLabel} <a href="#" class="sn-edit-link">Edit</a>
+      </div>
+    </div>
+  `;
+}
+
+function computeScanNowEstimate(scope) {
+  let totalStores = 0;
+  let totalSeconds = 0;
+  let maxDeptCount = 0;
+  for (const retailer of scope.retailers) {
+    const selected = retailer.stores.filter((s) => window._scanNowSelected.has(s.store_id));
+    if (!selected.length) continue;
+    totalStores += selected.length;
+    totalSeconds += selected.length * retailer.watched_department_count * scope.avg_seconds_per_store_department;
+    maxDeptCount = Math.max(maxDeptCount, retailer.watched_department_count);
+  }
+  return { minutes: totalStores ? Math.max(1, Math.round(totalSeconds / 60)) : 0, stores: totalStores, departments: maxDeptCount };
+}
+
+function renderScanNowFooter(scope) {
+  const est = computeScanNowEstimate(scope);
+  const estimateEl = $("#sn-estimate");
+  estimateEl.textContent = est.stores
+    ? `Estimated ~${est.minutes} min · ${est.stores} store${est.stores === 1 ? "" : "s"} · ${est.departments} department${est.departments === 1 ? "" : "s"}`
+    : "Select at least one store to scan.";
+  $("#sn-start").disabled = est.stores === 0;
+}
+
+function renderScanNowDialog(scope) {
+  const body = $("#modal-body");
+  body.innerHTML = `
+    <h2>Scan now</h2>
+    <p class="meta">Choose which stores to check. Department scope follows your Settings watch list.</p>
+    <div class="sn-retailers">${scope.retailers.map(scanNowRetailerBlockHtml).join("")}</div>
+    <div class="sn-footer">
+      <span id="sn-estimate" class="sn-estimate"></span>
+      <div class="sn-footer-actions">
+        <button id="sn-cancel" class="secondary" type="button">Cancel</button>
+        <button id="sn-start" type="button">Start scan</button>
+      </div>
+    </div>
+  `;
+
+  // .checked alone can't distinguish "0 selected" from "some, but not all,
+  // selected" -- both render as unchecked -- so a partial retailer would
+  // otherwise look identical to an empty one and a click would silently
+  // select everything instead of the expected "finish selecting the
+  // rest." .indeterminate is a JS-only DOM property (no HTML attribute),
+  // so it has to be set here after the checkbox already exists.
+  body.querySelectorAll(".sn-retailer-all").forEach((el) => {
+    const retailer = scope.retailers.find((r) => String(r.retailer_id) === el.dataset.retailerId);
+    const selectedCount = retailer.stores.filter((s) => window._scanNowSelected.has(s.store_id)).length;
+    el.indeterminate = selectedCount > 0 && selectedCount < retailer.stores.length;
+  });
+
+  body.querySelectorAll(".sn-store-check").forEach((el) =>
+    el.addEventListener("change", () => {
+      const storeId = Number(el.dataset.storeId);
+      if (el.checked) window._scanNowSelected.add(storeId);
+      else window._scanNowSelected.delete(storeId);
+      renderScanNowDialog(scope);
+    })
+  );
+  body.querySelectorAll(".sn-retailer-all").forEach((el) =>
+    el.addEventListener("change", () => {
+      const retailer = scope.retailers.find((r) => String(r.retailer_id) === el.dataset.retailerId);
+      retailer.stores.forEach((s) => {
+        if (el.checked) window._scanNowSelected.add(s.store_id);
+        else window._scanNowSelected.delete(s.store_id);
+      });
+      renderScanNowDialog(scope);
+    })
+  );
+  body.querySelectorAll(".sn-edit-link").forEach((el) =>
+    el.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      closeModal();
+      $('.tab-btn[data-tab="settings"]').click();
+    })
+  );
+  $("#sn-cancel").addEventListener("click", closeModal);
+  $("#sn-start").addEventListener("click", async () => {
+    const btn = $("#sn-start");
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+    // store_ids goes as repeated query params -- routes/scan.py's
+    // /trigger endpoint (like the scanner's own /trigger-scan it proxies
+    // to) has no request body, only query params.
+    const params = new URLSearchParams();
+    window._scanNowSelected.forEach((id) => params.append("store_ids", id));
+    await api(`/api/scan/trigger?${params.toString()}`, { method: "POST" }).catch(() => {});
+    closeModal();
+    refreshScanStatus();
+  });
+
+  renderScanNowFooter(scope);
+}
+
+async function openScanNowDialog() {
+  resetModalModifierClasses();
+  document.querySelector("#deal-modal .modal-content").classList.add("scan-now-detail");
+  const body = $("#modal-body");
+  body.innerHTML = `<p class="meta">Loading stores…</p>`;
+  $("#deal-modal").classList.remove("hidden");
+
+  const scope = await api("/api/scan/scope");
+  window._scanNowSelected = new Set();
+  scope.retailers.forEach((r) => r.stores.forEach((s) => window._scanNowSelected.add(s.store_id)));
+  renderScanNowDialog(scope);
+}
+
 const SCAN_STATE_LABELS = {
   starting: "Starting up…",
   scanning: "Scanning…",
@@ -1420,10 +1584,7 @@ async function main() {
   setupScopeBar();
   setupKeyboardShortcuts();
   $("#modal-close").addEventListener("click", closeModal);
-  $("#scan-now-btn").addEventListener("click", async () => {
-    await api("/api/scan/trigger", { method: "POST" });
-    refreshScanStatus();
-  });
+  $("#scan-now-btn").addEventListener("click", () => openScanNowDialog());
 
   api("/api/health").then((h) => {
     $("#build-time").textContent = h.build_time || "unknown";
