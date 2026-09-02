@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap"><link rel="stylesheet" href="_ds/industry-56bc75dc-8344-46df-8f1a-4d41fd8b4a0b/styles.css"><script src="_ds/industry-56bc75dc-8344-46df-8f1a-4d41fd8b4a0b/_ds_bundle.js"></script><style>body{margin:0;background:var(--color-bg);font-family:var(--font-body);color:var(--color-text)}a{color:var(--color-accent-700)}a:hover{color:var(--color-accent-900)}.dv-turn{padding:40px 44px 32px;scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:var(--color-text);color:var(--color-bg);border-radius:2px;text-decoration:none}.dv-tname{font-family:var(--font-heading);font-weight:600;font-size:15px;letter-spacing:.04em;text-transform:uppercase}.dv-opts{display:flex;flex-wrap:wrap;gap:44px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:12px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:var(--color-neutral-200);border-radius:2px;text-decoration:none;color:var(--color-text)}.dv-olabel{display:flex;align-items:baseline;gap:8px;font-size:12.5px;color:var(--color-neutral-700);max-width:1000px}.dv-opt:target .dv-oid{background:var(--color-accent);color:var(--color-bg)}.dv-next{margin:26px 0 0;font-size:12.5px;color:var(--color-neutral-700)}</style></helmet>
+
+<section class="dv-turn" id="t5">
+<div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">Header — detailed scan status + cancel + a running price-check odometer</span></div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="5a">
+<div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a>Compact — one row. Status pill grows to show phase + progress + Cancel only while a scan runs; the odometer sits as a small ticking chip on the far right otherwise.</div>
+<div class="blueprint" style="width:1100px;padding:0;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="display:flex;align-items:center;gap:18px;padding:12px 16px;border-bottom:1px solid var(--color-neutral-300)">
+    <div style="font-family:var(--font-heading);font-weight:700;font-size:19px;letter-spacing:.03em">CLEARANCE SCOUT</div>
+    <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-700)"><span style="color:var(--color-text);font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:2px">Deals</span><span>Lists</span><span>History</span><span>Scanner</span><span>Settings</span></div>
+
+    <div style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;margin-left:8px">
+      <span style="width:8px;height:8px;border-radius:50%;background:var(--color-accent);flex:none;box-shadow:0 0 0 3px var(--color-accent-100)"></span>
+      <div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:3px">
+        <div style="font-size:12px;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Scanning Home Depot — Cary #3608 — Lumber / Dimensional · 142 of 310 · ~6 min left</div>
+        <div style="height:4px;background:var(--color-neutral-200);position:relative"><div style="position:absolute;inset:0 54% 0 0;background:var(--color-accent)"></div></div>
+      </div>
+      <button class="btn btn-ghost" style="font-size:12px;padding:6px 10px;flex:none;color:var(--color-accent-900)">Cancel</button>
+    </div>
+
+    <button class="btn btn-primary" style="font-size:12.5px;padding:8px 14px;flex:none">Scan now</button>
+
+    <div class="blueprint" style="flex:none;padding:5px 10px;background:var(--color-bg)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div style="display:flex;align-items:baseline;gap:6px">
+        <span style="font-family:ui-monospace,monospace;font-weight:700;font-size:16px;letter-spacing:.02em;font-variant-numeric:tabular-nums">1,482,916</span>
+        <span style="font-size:9px;color:var(--color-neutral-600);letter-spacing:.06em">CHECKS</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p style="font-size:11.5px;color:var(--color-neutral-700);margin:0;max-width:1100px">Same row handles both states: no scan running collapses the status pill and just shows the odometer + Scan now.</p>
+</div>
+
+<div class="dv-opt" id="5b">
+<div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a>Two rows — nav on top, a dedicated status bar below it. Room for a bigger, more legible odometer and a real progress bar with phase breadcrumb + cancel.</div>
+<div class="blueprint" style="width:1100px;padding:0;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--color-neutral-300)">
+    <div style="display:flex;align-items:center;gap:18px">
+      <div style="font-family:var(--font-heading);font-weight:700;font-size:19px;letter-spacing:.03em">CLEARANCE SCOUT</div>
+      <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-700)"><span style="color:var(--color-text);font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:2px">Deals</span><span>Lists</span><span>History</span><span>Scanner</span><span>Settings</span></div>
+    </div>
+    <button class="btn btn-primary" style="font-size:12.5px;padding:8px 14px">Scan now</button>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:24px;padding:10px 16px;background:var(--color-neutral-100);border-bottom:1px solid var(--color-neutral-300)">
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+      <div style="display:flex;align-items:baseline;gap:8px;font-size:12.5px">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--color-accent);flex:none;box-shadow:0 0 0 3px var(--color-accent-100)"></span>
+        <span style="font-weight:600">Scanning</span>
+        <span style="color:var(--color-neutral-700)">Home Depot › Cary #3608 › Lumber / Dimensional</span>
+        <span style="color:var(--color-neutral-600);margin-left:auto">142 of 310 products · ~6 min left</span>
+      </div>
+      <div style="height:6px;background:var(--color-neutral-200);position:relative"><div style="position:absolute;inset:0 54% 0 0;background:var(--color-accent)"></div></div>
+    </div>
+    <button class="btn btn-ghost" style="font-size:12px;padding:7px 12px;flex:none;color:var(--color-accent-900)">Cancel scan</button>
+
+    <div style="width:1px;align-self:stretch;background:var(--color-neutral-300);flex:none"></div>
+
+    <div style="flex:none;display:flex;flex-direction:column;gap:2px;align-items:flex-end">
+      <div style="font-size:9px;letter-spacing:.1em;color:var(--color-neutral-600)">TOTAL PRICE CHECKS PERFORMED</div>
+      <div style="display:flex;align-items:stretch">
+        <div style="display:flex;border:1px solid var(--color-neutral-400);background:var(--color-bg)">
+          <div style="width:24px;text-align:center;font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums">1</div>
+        </div>
+        <span style="width:8px"></span>
+        <div style="display:flex;border:1px solid var(--color-neutral-400);background:var(--color-bg)">
+          <div style="width:24px;text-align:center;border-right:1px solid var(--color-neutral-300);font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums">4</div>
+          <div style="width:24px;text-align:center;border-right:1px solid var(--color-neutral-300);font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums">8</div>
+          <div style="width:24px;text-align:center;font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums;color:var(--color-accent-700)">2</div>
+        </div>
+        <span style="width:8px"></span>
+        <div style="display:flex;border:1px solid var(--color-neutral-400);background:var(--color-bg)">
+          <div style="width:24px;text-align:center;border-right:1px solid var(--color-neutral-300);font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums;color:var(--color-accent-700)">9</div>
+          <div style="width:24px;text-align:center;border-right:1px solid var(--color-neutral-300);font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums;color:var(--color-accent-700)">1</div>
+          <div style="width:24px;text-align:center;font-family:ui-monospace,monospace;font-weight:700;font-size:26px;padding:2px 0;font-variant-numeric:tabular-nums;color:var(--color-accent-700)">6</div>
+        </div>
+      </div>
+      <div style="font-size:10.5px;color:var(--color-accent-700)">+37 in the last minute</div>
+    </div>
+  </div>
+</div>
+<p style="font-size:11.5px;color:var(--color-neutral-700);margin:0;max-width:1100px">Digits in accent color are the ones that just ticked over — each completed price check rolls the last wheel like a mechanical odometer.</p>
+
+<div style="font-size:10px;letter-spacing:.1em;color:var(--color-neutral-600);margin-top:10px">IDLE STATE — no scan running, status bar is gone</div>
+<div class="blueprint" style="width:1100px;padding:0;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px">
+    <div style="display:flex;align-items:center;gap:18px">
+      <div style="font-family:var(--font-heading);font-weight:700;font-size:19px;letter-spacing:.03em">CLEARANCE SCOUT</div>
+      <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-700)"><span style="color:var(--color-text);font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:2px">Deals</span><span>Lists</span><span>History</span><span>Scanner</span><span>Settings</span></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="font-size:11px;color:var(--color-neutral-600)">1,482,916 checks · last scan 2h ago</div>
+      <button class="btn btn-primary" style="font-size:12.5px;padding:8px 14px">Scan now</button>
+    </div>
+  </div>
+</div>
+<p style="font-size:11.5px;color:var(--color-neutral-700);margin:0;max-width:1100px">The status bar (phase, progress, Cancel, big odometer) only renders while <span style="font-family:ui-monospace,monospace">scanner.state === "scanning"</span>. Idle just shows the nav row with a quiet running total and Scan now — it appears/disappears with the scan, not a persistent second row.</p>
+</div>
+
+</div>
+<p class="dv-next">Both need a live channel (poll <span style="font-family:ui-monospace,monospace">/api/scan/status</span> faster, or push over SSE/websocket) and a running counter column — today price checks aren't tallied anywhere, so this is a new aggregate, not just new UI. "Cancel" also needs a real cancellation path for the scanner process, not just hiding the bar. Try next: "wire 5b's odometer to tick from real numbers" · "add a small odometer to the Settings global section too"</p>
+</section>
+
+<section class="dv-turn" id="t4">
+<div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">Item detail (greenfield) · scoped Scan Now · Settings by retailer</span></div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="4a">
+<div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a>Item detail — full-size overlay replacing the cramped modal. Per-store cards instead of a scrolling table, plus the clearance-watch history.</div>
+<div style="width:1000px;background:var(--color-neutral-800);padding:36px;display:flex;justify-content:center;box-sizing:border-box">
+  <div class="blueprint" style="width:860px;background:var(--color-bg);box-shadow:var(--shadow-lg);padding:0">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid var(--color-neutral-300);font-size:12px;color:var(--color-neutral-700)">
+      <a href="#4a">‹ Back to Deals</a><span>·</span><span>Home Depot</span><span>/</span><span>Building Materials</span><span>/</span><span>Lumber</span><span>/</span><span>Dimensional</span><span>/</span><span style="color:var(--color-text);font-weight:600">Pressure Treated</span>
+      <a href="#4a" style="margin-left:auto;font-size:16px;color:var(--color-neutral-700);text-decoration:none">×</a>
+    </div>
+
+    <div style="display:flex;gap:20px;padding:24px 24px 20px;border-bottom:1px solid var(--color-neutral-200)">
+      <div style="width:160px;height:160px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="tag tag-accent" style="background:var(--color-accent);color:var(--color-bg);font-weight:600;font-size:12px">Active clearance</span>
+          <span class="tag tag-outline" style="font-size:11.5px">Was on close-eye watch 3d</span>
+        </div>
+        <h1 style="margin:0;font-family:var(--font-heading);font-weight:600;font-size:26px;line-height:1.15;letter-spacing:.01em">2×6×8 #2 Pressure-Treated Ground Contact Southern Pine Lumber</h1>
+        <div style="font-size:12.5px;color:var(--color-neutral-700)">SKU 1000123456 · Home Depot product ID 204471982</div>
+        <div style="display:flex;align-items:baseline;gap:12px">
+          <span style="font-family:var(--font-heading);font-weight:600;font-size:30px">$3.47 – $5.12</span>
+          <span style="font-size:15px;text-decoration:line-through;color:var(--color-neutral-600)">$11.98</span>
+          <span class="tag tag-accent" style="font-size:12.5px">62–71% off</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+          <button class="btn btn-primary" style="font-size:13px;padding:8px 14px">Want</button>
+          <div style="display:flex"><button class="btn btn-secondary" style="font-size:13px;padding:8px 14px;border-right:none">Not interested</button><button class="btn btn-secondary" style="font-size:13px;padding:8px 9px" title="Not yet — re-alert at a deeper discount">▾</button></div>
+          <button class="btn btn-secondary" style="font-size:13px;padding:8px 14px">Share link</button>
+          <button class="btn btn-ghost" style="font-size:13px;padding:8px 14px">Email to self</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:16px 24px;border-bottom:1px solid var(--color-neutral-200);display:flex;flex-direction:column;gap:10px">
+      <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">HISTORY</div>
+      <div style="display:flex;gap:20px;align-items:center">
+        <svg width="220" height="52" viewBox="0 0 220 52" style="flex:none">
+          <polyline points="4,8 70,8 120,32 210,44" fill="none" stroke="var(--color-accent)" stroke-width="2"></polyline>
+          <circle cx="4" cy="8" r="3" fill="var(--color-accent)"></circle>
+          <circle cx="120" cy="32" r="3" fill="var(--color-accent)"></circle>
+          <circle cx="210" cy="44" r="3" fill="var(--color-accent)"></circle>
+        </svg>
+        <div style="font-size:12.5px;line-height:1.7;color:var(--color-neutral-700)">
+          Full price $11.98 since Aug 20 · flagged upcoming clearance Aug 26 (checked every 2h) · dropped to $5.12 (62%) Aug 29 · deepened to $3.47 (71%) 2h ago at Chapel Hill #3612.
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:16px 24px 6px;display:flex;align-items:baseline;justify-content:space-between">
+      <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">AVAILABLE AT 2 OF 2 HOME DEPOT STORES NEAR YOU</div>
+      <div style="font-size:11.5px;color:var(--color-neutral-700)">Title above uses the cheapest store · store links open that store's page directly</div>
+    </div>
+    <div style="padding:6px 24px 22px;display:flex;flex-direction:column;gap:10px">
+
+      <div class="blueprint" style="padding:14px 16px;background:var(--color-bg)">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div style="display:flex;align-items:flex-start;gap:16px">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;align-items:baseline;gap:8px"><a href="#4a" style="font-weight:600;font-size:15px;text-decoration:none">Chapel Hill #3612 ↗</a><span style="font-size:11px;color:var(--color-neutral-600)">cheapest</span></div>
+            <a class="store-address-link" href="#4a" style="font-size:12.5px">2540 E Franklin St, Chapel Hill, NC 27514</a>
+            <div style="font-size:12.5px;color:var(--color-neutral-700)">Aisle 12 / Bay 004 · <span class="stock-dot low" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-accent-700);margin-right:3px"></span>4 left · checked 2h ago</div>
+          </div>
+          <div style="width:100px;text-align:right"><div style="font-weight:600;font-size:18px">$3.47</div><div style="font-size:11px;text-decoration:line-through;color:var(--color-neutral-600)">$11.98</div><span class="tag tag-accent" style="font-size:11px">71%</span></div>
+          <button class="btn btn-secondary" style="font-size:12px;padding:8px 12px;flex:none;align-self:center">Add to this store's list</button>
+        </div>
+      </div>
+
+      <div class="blueprint" style="padding:14px 16px;background:var(--color-bg)">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div style="display:flex;align-items:flex-start;gap:16px">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;align-items:baseline;gap:8px"><a href="#4a" style="font-weight:600;font-size:15px;text-decoration:none">Cary #3608 ↗</a></div>
+            <a class="store-address-link" href="#4a" style="font-size:12.5px">1000 Ryan Rd, Cary, NC 27511</a>
+            <div style="font-size:12.5px;color:var(--color-neutral-700)">Aisle 09 / Bay 011 · <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-accent-500);margin-right:3px"></span>26 left · checked 3h ago</div>
+          </div>
+          <div style="width:100px;text-align:right"><div style="font-weight:600;font-size:18px">$5.12</div><div style="font-size:11px;text-decoration:line-through;color:var(--color-neutral-600)">$11.98</div><span class="tag tag-accent" style="font-size:11px">62%</span></div>
+          <button class="btn btn-secondary" style="font-size:12px;padding:8px 12px;flex:none;align-self:center">Add to this store's list</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="dv-opt" id="4b">
+<div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a>Scan Now — pick retailers, stores and (optionally) departments before triggering, with a time estimate that updates with the selection.</div>
+<div style="width:640px;background:var(--color-neutral-800);padding:60px 30px;display:flex;justify-content:center;box-sizing:border-box">
+  <div class="blueprint" style="width:560px;background:var(--color-bg);box-shadow:var(--shadow-lg);padding:0">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div style="padding:18px 20px 14px;border-bottom:1px solid var(--color-neutral-200)">
+      <div style="display:flex;align-items:baseline;justify-content:space-between">
+        <h2 style="margin:0;font-family:var(--font-heading);font-weight:600;font-size:19px;letter-spacing:.02em">SCAN NOW</h2>
+        <a href="#4b" style="font-size:15px;color:var(--color-neutral-700);text-decoration:none">×</a>
+      </div>
+      <p style="margin:6px 0 0;font-size:12.5px;color:var(--color-neutral-700)">A full scan across every configured retailer and department can take hours. Narrow it down to what you need before you drive out.</p>
+    </div>
+
+    <div style="padding:14px 20px;border-bottom:1px solid var(--color-neutral-200);display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600">
+        <span style="width:14px;height:14px;border:1.5px solid var(--color-accent);background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none">✓</span>
+        Home Depot <span style="font-weight:400;color:var(--color-neutral-700);font-size:12px">· 2 of 2 stores selected</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:1px;margin-left:22px;font-size:12.5px">
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 0">
+          <span style="width:13px;height:13px;border:1.5px solid var(--color-accent);background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex:none">✓</span>
+          <span style="flex:1">Chapel Hill #3612 · 6 mi · scanned 2h ago</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 0">
+          <span style="width:13px;height:13px;border:1.5px solid var(--color-accent);background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex:none">✓</span>
+          <span style="flex:1">Cary #3608 · 24 mi · scanned 3h ago</span>
+        </label>
+        <div style="padding:5px 0;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px">Departments: Pressure Treated, Dimensional +2 more <a href="#4c" style="font-weight:600">Edit</a></div>
+      </div>
+    </div>
+
+    <div style="padding:14px 20px;border-bottom:1px solid var(--color-neutral-200);display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600">
+        <span style="width:14px;height:14px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+        Best Buy <span style="font-weight:400;color:var(--color-neutral-700);font-size:12px">· 0 of 1 store selected</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:1px;margin-left:22px;font-size:12.5px">
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 0">
+          <span style="width:13px;height:13px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+          <span style="flex:1;color:var(--color-neutral-700)">Durham #1188 · 9 mi · scanned 1d ago</span>
+        </label>
+        <div style="padding:5px 0;color:var(--color-neutral-700)">Departments: PlayStation 5 <a href="#4c" style="font-weight:600">Edit</a></div>
+      </div>
+    </div>
+
+    <div style="padding:12px 20px;border-bottom:1px solid var(--color-neutral-200);font-size:13px;color:var(--color-neutral-600);display:flex;align-items:center;gap:8px">
+      <span style="width:14px;height:14px;border:1.5px solid var(--color-neutral-400);display:inline-flex;flex:none"></span>
+      Lowe's <span style="font-size:12px">· not connected — add in Settings</span>
+    </div>
+
+    <div style="padding:14px 20px 18px;display:flex;align-items:center;gap:10px">
+      <div style="font-size:12px;color:var(--color-neutral-700)"><strong style="color:var(--color-text)">Estimated ~24 min</strong> · 2 stores · 6 departments</div>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button class="btn btn-ghost" style="font-size:12.5px;padding:8px 14px">Cancel</button>
+        <button class="btn btn-primary" style="font-size:12.5px;padding:8px 14px">Start scan</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="dv-opt" id="4c">
+<div class="dv-olabel"><a class="dv-oid" href="#4c">4c</a>Settings — one panel per retailer, department watch list is now a checkbox tree instead of a comma-separated text field. <strong>Ahead of where the product is today</strong> — per-retailer config, per-store toggles and the live tree are future placeholders, not near-term scope.</div>
+<div class="blueprint" style="width:1000px;padding:0;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--color-neutral-300)">
+    <div style="font-family:var(--font-heading);font-weight:700;font-size:19px;letter-spacing:.03em">CLEARANCE SCOUT</div>
+    <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-700)"><span>Deals</span><span>Lists</span><span>History</span><span>Scanner</span><span style="color:var(--color-text);font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:2px">Settings</span></div>
+  </div>
+  <div style="display:flex;min-height:640px">
+
+    <div style="width:220px;border-right:1px solid var(--color-neutral-300);padding:16px 14px;display:flex;flex-direction:column;gap:20px">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600);margin-bottom:6px">RETAILERS</div>
+        <div style="display:flex;flex-direction:column;gap:1px;padding:8px 8px;background:var(--color-accent-200)">
+          <div style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:13.5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--color-accent-700);flex:none"></span>Home Depot</div>
+          <div style="font-size:11px;color:var(--color-neutral-700);margin-left:12px">2 stores · enabled</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px;padding:8px 8px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:13.5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--color-accent-700);flex:none"></span>Best Buy</div>
+          <div style="font-size:11px;color:var(--color-neutral-700);margin-left:12px">1 store · enabled</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px;padding:8px 8px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:13.5px;color:var(--color-neutral-600)"><span style="width:6px;height:6px;border-radius:50%;background:var(--color-neutral-400);flex:none"></span>Lowe's</div>
+          <div style="font-size:11px;color:var(--color-neutral-600);margin-left:12px">not connected</div>
+        </div>
+        <a href="#4c" style="font-size:12.5px;margin-top:6px;padding:6px 8px">+ Add retailer</a>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600);margin-bottom:6px">GLOBAL</div>
+        <a href="#4c" style="font-size:13px;padding:6px 8px;color:var(--color-neutral-700)">Scan schedule</a>
+        <a href="#4c" style="font-size:13px;padding:6px 8px;color:var(--color-neutral-700)">Notifications</a>
+        <a href="#4c" style="font-size:13px;padding:6px 8px;color:var(--color-neutral-700)">Data &amp; export</a>
+      </div>
+    </div>
+
+    <div style="flex:1;display:flex;flex-direction:column;padding:20px 24px;gap:22px;overflow:hidden">
+
+      <div style="display:flex;align-items:center;gap:10px">
+        <h2 style="margin:0;font-family:var(--font-heading);font-weight:600;font-size:22px;letter-spacing:.02em">HOME DEPOT</h2>
+        <span class="tag tag-outline" style="font-size:11.5px">Connected · adapter v3</span>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-left:8px"><input type="checkbox" checked="checked" style="accent-color:var(--color-accent)">Enabled</label>
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px;margin-left:auto;color:var(--color-accent-900)">Remove retailer</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--color-neutral-700);background:var(--color-neutral-100);border:1px solid var(--color-neutral-300);padding:8px 10px">Placeholder for a future state — the product doesn't yet support per-retailer config, per-store toggles or a live department tree. Shown here to design the target shape, not to scope near-term work.</div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">LOCATION &amp; STORES</div>
+        <div style="display:flex;gap:16px">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--color-neutral-700)">ZIP code<input class="input" value="27514" style="font-size:13px;padding:6px 8px;width:100px"></label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--color-neutral-700)">Radius (miles)<input class="input" value="25" style="font-size:13px;padding:6px 8px;width:90px"></label>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px;border:1px solid var(--color-neutral-300)">
+          <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid var(--color-neutral-200);font-size:12.5px">
+            <input type="checkbox" checked="checked" style="accent-color:var(--color-accent)">
+            <span style="flex:1">Chapel Hill #3612 — 2540 E Franklin St</span><span style="color:var(--color-neutral-700)">6 mi</span><span style="color:var(--color-neutral-700);width:100px;text-align:right">scanned 2h ago</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;font-size:12.5px">
+            <input type="checkbox" checked="checked" style="accent-color:var(--color-accent)">
+            <span style="flex:1">Cary #3608 — 1000 Ryan Rd</span><span style="color:var(--color-neutral-700)">24 mi</span><span style="color:var(--color-neutral-700);width:100px;text-align:right">scanned 3h ago</span>
+          </div>
+        </div>
+        <a href="#4c" style="font-size:12px">Rescan store list</a>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between">
+          <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">DEPARTMENTS TO WATCH</div>
+          <span style="font-size:11.5px;color:var(--color-neutral-700)">2 selected explicitly · 25 products in scope incl. sub-departments</span>
+        </div>
+        <input class="input" placeholder="Filter departments" style="font-size:12.5px;padding:6px 8px;width:260px">
+        <div style="display:flex;flex-direction:column;gap:1px;font-size:13px;line-height:1.5;border:1px solid var(--color-neutral-200);padding:6px 4px">
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-accent);color:var(--color-accent-900);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none">–</span>
+            <span style="flex:1;font-weight:600">▾ Building Materials</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">72</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 24px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-accent);color:var(--color-accent-900);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none">–</span>
+            <span style="flex:1;font-weight:600">▾ Lumber</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">48</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;background:var(--color-accent-100)">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-accent);background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none">–</span>
+            <span style="flex:1;font-weight:600">▾ Dimensional</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">31</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 60px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-accent);background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none">✓</span>
+            <span style="flex:1">Pressure Treated</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">23</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 60px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+            <span style="flex:1;color:var(--color-neutral-700)">Kiln-Dried</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">8</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+            <span style="flex:1;color:var(--color-neutral-700)">▸ Plywood &amp; Sheet</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">17</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 24px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+            <span style="flex:1;color:var(--color-neutral-700)">▸ Drywall</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">14</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+            <span style="flex:1;color:var(--color-neutral-700)">▸ Electrical</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">19</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:3px 8px">
+            <span style="width:13px;height:13px;border:1.5px solid var(--color-neutral-500);display:inline-flex;flex:none"></span>
+            <span style="flex:1;color:var(--color-neutral-700)">▸ Tools</span><span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">13</span>
+          </label>
+        </div>
+        <div style="font-size:11px;color:var(--color-neutral-600)">"–" marks a parent with some but not all children selected. Best Buy has its own tree (Video Games ▸ Consoles ▸ PlayStation 5) under its own panel.</div>
+      </div>
+
+      <div style="display:flex;gap:16px">
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--color-neutral-700);flex:1">Watch keywords (optional, flat)<input class="input" placeholder="blank = all products in watched departments" style="font-size:13px;padding:6px 8px"></label>
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--color-neutral-700)">Scan interval (min)<input class="input" value="240" style="font-size:13px;padding:6px 8px;width:90px"></label>
+      </div>
+
+      <div style="margin-top:auto;padding-top:12px;border-top:1px solid var(--color-neutral-200);display:flex;align-items:center;gap:12px">
+        <button class="btn btn-secondary" style="font-size:12.5px;padding:7px 12px">Force product re-list</button>
+        <span style="font-size:11.5px;color:var(--color-neutral-600)">Clears the product-list cache for this retailer's watched departments — next scan rediscovers items instead of trusting the cache.</span>
+        <button class="btn btn-primary" style="font-size:12.5px;padding:8px 16px;margin-left:auto">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">4b/4c imply a schema change: <span style="font-family:ui-monospace,monospace">scanner_settings</span> is currently one global row — per-retailer scoping needs a row per retailer (and a scan-run parameterized by store/department ids). Flagging for the handoff doc. Try next: "wire 4b's department Edit link to 4c's tree" · "add a Best Buy panel to 4c"</p>
+</section>
+
+<section class="dv-turn" id="t3">
+<div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Shopping lists — one per store, aisle order</span></div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="3a">
+<div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a>Desktop — all store lists side by side. Each is self-contained: address, hours, directions, aisle-ordered items.</div>
+<div class="blueprint" style="width:1000px;padding:0;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--color-neutral-300)">
+    <div style="font-family:var(--font-heading);font-weight:700;font-size:19px;letter-spacing:.03em">CLEARANCE SCOUT</div>
+    <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-700)"><span>Deals</span><span style="color:var(--color-text);font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:2px">Lists</span><span>History</span><span>Scanner</span><span>Settings</span></div>
+  </div>
+
+  <div style="padding:13px 16px;border-bottom:1px solid var(--color-neutral-300);display:flex;align-items:center;gap:10px;font-size:12.5px">
+    <span style="font-family:var(--font-heading);font-weight:600;font-size:16px;letter-spacing:.03em">3 STORE LISTS · 14 ITEMS</span>
+    <span class="tag tag-outline" style="font-size:11.5px">Home Depot #3612 · 6</span>
+    <span class="tag tag-outline" style="font-size:11.5px">Home Depot #3608 · 5</span>
+    <span class="tag tag-outline" style="font-size:11.5px">Best Buy #1188 · 3</span>
+    <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 10px;margin-left:auto">Email all 3 lists</button>
+    <span style="color:var(--color-neutral-700)">Lists never merge — each is a separate trip.</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0">
+
+    <div style="border-right:1px solid var(--color-neutral-300);border-bottom:1px solid var(--color-neutral-300);display:flex;flex-direction:column">
+      <div style="padding:13px 16px;border-bottom:1px solid var(--color-neutral-200);display:flex;flex-direction:column;gap:5px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between">
+          <div style="font-family:var(--font-heading);font-weight:600;font-size:19px;letter-spacing:.02em">HOME DEPOT · CHAPEL HILL #3612</div>
+          <span style="font-size:11.5px;color:var(--color-neutral-700)">6 items</span>
+        </div>
+        <div style="font-size:12px;color:var(--color-neutral-700);line-height:1.55">2540 E Franklin St, Chapel Hill, NC 27514<br>Open today 6a–10p · closes in 4h</div>
+        <div style="display:flex;gap:8px;margin-top:3px">
+          <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 10px">Directions ↗</button>
+          <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 10px">Open walking view</button>
+          <button class="btn btn-primary" style="font-size:11.5px;padding:5px 10px">Email this list</button>
+          <button class="btn btn-ghost" style="font-size:11.5px;padding:5px 10px">Print</button>
+        </div>
+        <div style="font-size:11px;color:var(--color-neutral-700);line-height:1.5">Email includes aisle/bay, photos, prices, SKUs and the directions link — readable with no signal in the store.</div>
+      </div>
+
+      <div style="padding:7px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">AISLE 09 · 1 ITEM</div>
+      <div style="display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px">2×4×8 KD-HT Whitewood Stud</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 003 · 140 left · SKU 1000556677</div>
+        </div>
+        <div style="text-align:right"><div style="font-weight:600;font-size:14px">$1.24</div><div style="font-size:11px;color:var(--color-neutral-600)">×4</div></div>
+      </div>
+
+      <div style="padding:7px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">AISLE 12 · 3 ITEMS</div>
+      <div style="display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)" checked="checked">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px);opacity:.5"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px;text-decoration:line-through;color:var(--color-neutral-700)">2×6×8 #2 Pressure-Treated Pine</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 004 · found &amp; purchased 11:20a</div>
+        </div>
+        <div style="text-align:right;color:var(--color-neutral-700)"><div style="font-weight:600;font-size:14px">$3.47</div></div>
+      </div>
+      <div style="display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px">5/4×6×8 PT Deck Board</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 002 · 61 left</div>
+        </div>
+        <div style="text-align:right"><div style="font-weight:600;font-size:14px">$2.98</div><div style="font-size:11px;color:var(--color-neutral-600)">×10</div></div>
+      </div>
+      <div style="display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center;background:var(--color-neutral-100)">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px dashed var(--color-neutral-400)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px;color:var(--color-neutral-700)">4×4×8 Pressure-Treated Post</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 007 · marked <strong>can't find</strong> · kept for next trip</div>
+        </div>
+        <div style="text-align:right;color:var(--color-neutral-700)"><div style="font-weight:600;font-size:14px">$5.12</div></div>
+      </div>
+
+      <div style="padding:7px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">AISLE UNKNOWN · 2 ITEMS</div>
+      <div style="display:flex;gap:10px;padding:10px 16px;align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px">Deck Joist Hanger, 20-pack</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">no aisle from site · ask an associate</div>
+        </div>
+        <div style="text-align:right"><div style="font-weight:600;font-size:14px">$0.01</div></div>
+      </div>
+      <div style="padding:11px 16px;border-top:1px solid var(--color-neutral-200);font-size:11.5px;color:var(--color-neutral-700);display:flex;justify-content:space-between">
+        <span>1 of 6 picked up · 1 not found</span><span><a href="#3a">Clear finished</a></span>
+      </div>
+    </div>
+
+    <div style="border-bottom:1px solid var(--color-neutral-300);display:flex;flex-direction:column">
+      <div style="padding:13px 16px;border-bottom:1px solid var(--color-neutral-200);display:flex;flex-direction:column;gap:5px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between">
+          <div style="font-family:var(--font-heading);font-weight:600;font-size:19px;letter-spacing:.02em">HOME DEPOT · CARY #3608</div>
+          <span style="font-size:11.5px;color:var(--color-neutral-700)">5 items</span>
+        </div>
+        <div style="font-size:12px;color:var(--color-neutral-700);line-height:1.55">1000 Ryan Rd, Cary, NC 27511<br>Open today 6a–10p · 24 min away</div>
+        <div style="display:flex;gap:8px;margin-top:3px">
+          <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 10px">Directions ↗</button>
+          <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 10px">Open walking view</button>
+          <button class="btn btn-primary" style="font-size:11.5px;padding:5px 10px">Email this list</button>
+          <button class="btn btn-ghost" style="font-size:11.5px;padding:5px 10px">Print</button>
+        </div>
+      </div>
+      <div style="padding:7px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">AISLE 09 · 2 ITEMS</div>
+      <div style="display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px">2×6×8 #2 Pressure-Treated Pine</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 011 · 26 left · cheaper at #3612</div>
+        </div>
+        <div style="text-align:right"><div style="font-weight:600;font-size:14px">$5.12</div></div>
+      </div>
+      <div style="display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px">2×4×8 KD-HT Whitewood Stud</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 003 · 140 left</div>
+        </div>
+        <div style="text-align:right"><div style="font-weight:600;font-size:14px">$1.24</div></div>
+      </div>
+      <div style="padding:7px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">AISLE 26 · 3 ITEMS</div>
+      <div style="display:flex;gap:10px;padding:10px 16px;align-items:center">
+        <input type="checkbox" style="accent-color:var(--color-accent)">
+        <div style="width:40px;height:40px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+          <div style="font-weight:600;font-size:13px">Romex 250 ft. 12/2 NM-B Wire</div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">Bay 004 · 3 left</div>
+        </div>
+        <div style="text-align:right"><div style="font-weight:600;font-size:14px">$0.01</div></div>
+      </div>
+      <div style="padding:11px 16px;margin-top:auto;border-top:1px solid var(--color-neutral-200);font-size:11.5px;color:var(--color-neutral-700)">Nothing picked up yet</div>
+    </div>
+  </div>
+
+  <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;font-size:12.5px">
+    <span style="font-family:var(--font-heading);font-weight:600;font-size:16px;letter-spacing:.03em">BEST BUY · DURHAM #1188</span>
+    <span style="color:var(--color-neutral-700)">3 items · 1751 Martin Luther King Jr Pkwy · closes 8p</span>
+    <div style="display:flex;gap:8px;margin-left:auto">
+      <button class="btn btn-primary" style="font-size:11.5px;padding:5px 10px">Email this list</button>
+      <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 10px">Expand</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="dv-opt" id="3b">
+<div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a>Mobile walking view — one store, aisle order, big targets. Found / can't find / no longer need per item.</div>
+<div class="blueprint" style="width:390px;padding:0;display:flex;flex-direction:column;height:800px;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="padding:14px 16px 11px;border-bottom:1px solid var(--color-neutral-300);display:flex;flex-direction:column;gap:7px">
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-700)"><a href="#3b">‹ Lists</a><span style="margin-left:auto">4 of 6 left</span></div>
+    <div style="font-family:var(--font-heading);font-weight:600;font-size:21px;letter-spacing:.02em;line-height:1.05">HOME DEPOT<br>CHAPEL HILL #3612</div>
+    <div style="font-size:12px;color:var(--color-neutral-700)">2540 E Franklin St · closes 10p · <a href="#3b">Directions ↗</a></div>
+    <div style="height:4px;background:var(--color-neutral-200)"><div style="width:33%;height:100%;background:var(--color-accent)"></div></div>
+  </div>
+
+  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:9px 16px;background:var(--color-accent-200);font:600 11px/1 ui-monospace,monospace;letter-spacing:.12em">AISLE 09 · BAY 003</div>
+    <div style="padding:13px 16px;border-bottom:1px solid var(--color-neutral-200);display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;gap:12px">
+        <div style="width:84px;height:84px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+          <div style="font-weight:600;font-size:15px;line-height:1.25">2×4×8 KD-HT Whitewood Stud</div>
+          <div style="display:flex;align-items:baseline;gap:8px"><span style="font-weight:600;font-size:17px">$1.24</span><span class="tag tag-accent" style="font-size:11px">64% off</span></div>
+          <div style="font-size:12px;color:var(--color-neutral-700)">140 left · yellow-tag clearance<br>SKU 1000556677</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:9px">
+        <button class="btn btn-primary" style="flex:1;padding:14px 0;font-size:14.5px">Found it</button>
+        <button class="btn btn-secondary" style="flex:none;padding:14px 16px;font-size:14.5px">Can't find</button>
+        <button class="btn btn-ghost" style="flex:none;padding:14px 14px;font-size:14.5px">Skip</button>
+      </div>
+    </div>
+
+    <div style="padding:9px 16px;background:var(--color-neutral-100);font:600 11px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">AISLE 12 · 3 ITEMS</div>
+    <div style="display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center">
+      <div style="width:56px;height:56px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+        <div style="font-weight:600;font-size:13.5px;line-height:1.25">5/4×6×8 PT Deck Board</div>
+        <div style="font-size:12px;color:var(--color-neutral-700)">Bay 002 · $2.98 · ×10</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center;background:var(--color-neutral-100)">
+      <div style="width:56px;height:56px;flex:none;border:1px dashed var(--color-neutral-400)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+        <div style="font-weight:600;font-size:13.5px;color:var(--color-neutral-700)">4×4×8 Pressure-Treated Post</div>
+        <div style="font-size:12px;color:var(--color-neutral-700)">Bay 007 · can't find · <a href="#3b">reason</a></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center;opacity:.55">
+      <div style="width:56px;height:56px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+        <div style="font-weight:600;font-size:13.5px;text-decoration:line-through">2×6×8 #2 PT Pine</div>
+        <div style="font-size:12px">purchased 11:20a · $3.47</div>
+      </div>
+    </div>
+    <div style="padding:12px 16px;font-size:12px;color:var(--color-neutral-700)">Aisle unknown · 2 items ▸</div>
+  </div>
+
+  <div style="padding:11px 16px 18px;border-top:1px solid var(--color-neutral-300);display:flex;align-items:center;gap:10px;font-size:12px">
+    <button class="btn btn-secondary" style="font-size:12px;padding:9px 12px">No longer need</button>
+    <button class="btn btn-ghost" style="font-size:12px;padding:9px 12px">Undo</button>
+    <span style="margin-left:auto;color:var(--color-neutral-700)">1 purchased</span>
+  </div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Try next: "add the can't-find reason sheet" · "show the finished-trip / history state"</p>
+</section>
+
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Deals — desktop tree + mobile scanning list</span></div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="2a">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Desktop — retailer is the tree root, each retailer carries its own department tree, rows expand per store.</div>
+<div class="blueprint" style="width:1000px;padding:0;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--color-neutral-300)">
+    <div style="font-family:var(--font-heading);font-weight:700;font-size:19px;letter-spacing:.03em">CLEARANCE SCOUT</div>
+    <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-700)"><span style="color:var(--color-text);font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:2px">Deals</span><span>Lists</span><span>History</span><span>Scanner</span><span>Settings</span></div>
+  </div>
+  <div style="display:flex;min-height:600px">
+
+    <div style="width:252px;border-right:1px solid var(--color-neutral-300);padding:14px 14px 20px;display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">RETAILERS &amp; STORES</div>
+        <div style="display:flex;flex-direction:column;gap:1px;font-size:13px">
+          <div style="display:flex;justify-content:space-between;padding:5px 6px;background:var(--color-accent-200);font-weight:600">▾ Home Depot<span style="font-family:ui-monospace,monospace;font-size:11px">104</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 20px;font-weight:600;color:var(--color-accent-700)">All 2 stores<span style="font-family:ui-monospace,monospace;font-size:11px">104</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 20px;color:var(--color-neutral-700)">Chapel Hill #3612<span style="font-family:ui-monospace,monospace;font-size:11px">61</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 20px;color:var(--color-neutral-700)">Cary #3608<span style="font-family:ui-monospace,monospace;font-size:11px">43</span></div>
+          <div style="display:flex;justify-content:space-between;padding:5px 6px">▸ Best Buy<span style="font-family:ui-monospace,monospace;font-size:11px">44</span></div>
+          <div style="display:flex;justify-content:space-between;padding:5px 6px;color:var(--color-neutral-600)">▸ Lowe's<span style="font-family:ui-monospace,monospace;font-size:11px">0</span></div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">HOME DEPOT DEPARTMENTS</div>
+        <input class="input" placeholder="Filter departments" style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px">
+        <div style="display:flex;flex-direction:column;gap:1px;font-size:13px;line-height:1.45">
+          <div style="display:flex;justify-content:space-between;padding:4px 6px;font-weight:600">▾ Building Materials<span style="font-family:ui-monospace,monospace;font-size:11px">72</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 20px;font-weight:600">▾ Lumber<span style="font-family:ui-monospace,monospace;font-size:11px">48</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 34px;background:var(--color-accent-200);font-weight:600">▾ Dimensional<span style="font-family:ui-monospace,monospace;font-size:11px">31</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 48px;color:var(--color-neutral-700)">Pressure Treated<span style="font-family:ui-monospace,monospace;font-size:11px">23</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 48px;color:var(--color-neutral-700)">Kiln-Dried<span style="font-family:ui-monospace,monospace;font-size:11px">8</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 34px;color:var(--color-neutral-700)">▸ Plywood &amp; Sheet<span style="font-family:ui-monospace,monospace;font-size:11px">17</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px 4px 20px;color:var(--color-neutral-700)">▸ Drywall<span style="font-family:ui-monospace,monospace;font-size:11px">14</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px;color:var(--color-neutral-700)">▸ Electrical<span style="font-family:ui-monospace,monospace;font-size:11px">19</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 6px;color:var(--color-neutral-700)">▸ Tools<span style="font-family:ui-monospace,monospace;font-size:11px">13</span></div>
+        </div>
+        <div style="margin-top:4px;font-size:11px;line-height:1.5;color:var(--color-neutral-600)">Best Buy has its own tree (Video Games / Consoles / PlayStation 5) — switching retailer swaps this panel.</div>
+      </div>
+    </div>
+
+    <div style="flex:1;display:flex;flex-direction:column">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--color-neutral-300);display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-700)">
+          <span>Home Depot · all stores</span><span>/</span><span>Building Materials</span><span>/</span><span>Lumber</span><span>/</span><span style="color:var(--color-text);font-weight:600">Dimensional</span>
+          <span class="tag tag-outline" style="margin-left:6px;font-size:11px">incl. sub-departments ✓</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="input" placeholder="Search these deals…" style="flex:1;min-width:220px;font-size:13px;padding:7px 9px">
+          <select style="flex:none;width:auto;font-size:12.5px;padding:7px 8px;border:1px solid var(--color-neutral-300);border-radius:var(--radius-sm);background:transparent"><option>Sort: newest</option></select>
+          <select style="flex:none;width:auto;font-size:12.5px;padding:7px 8px;border:1px solid var(--color-neutral-300);border-radius:var(--radius-sm);background:transparent"><option>Filters (2)</option></select>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 16px;border-bottom:1px solid var(--color-neutral-200);font-size:12px">
+        <span style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600)">STATUS</span>
+        <span class="tag tag-accent" style="font-size:11.5px;background:var(--color-accent);color:var(--color-bg);font-weight:600">Active clearance 24</span>
+        <span class="tag tag-outline" style="font-size:11.5px">Watching 7</span>
+        <span class="tag tag-outline" style="font-size:11.5px">Waiting for deeper cut 5</span>
+        <span class="tag tag-outline" style="font-size:11.5px">All 31</span>
+        <span style="margin-left:auto;color:var(--color-neutral-700)">Titles and images open the store's product page (<span style="font-family:ui-monospace,monospace">?store=</span>cheapest)</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--color-neutral-200);background:var(--color-accent-100);font-size:12px">
+        <strong>9 new</strong><span style="color:var(--color-neutral-700)">since Aug 30 · 31 total</span>
+        <button class="btn btn-secondary" style="font-size:11.5px;padding:4px 9px">Triage new only</button>
+        <span style="margin-left:auto;color:var(--color-neutral-700)">Last dismissed: Cedar Picket · <a href="#2a">undo</a></span>
+      </div>
+
+      <div>
+        <div style="border-bottom:1px solid var(--color-neutral-200)">
+          <div style="display:flex;gap:12px;align-items:center;padding:11px 16px">
+            <a href="#2a" style="width:52px;height:52px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)" title="Opens #3612 product page (cheapest)"></a>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+              <div style="font-size:13.5px"><a href="#2a" style="font-weight:600;text-decoration:none">2×6×8 #2 Pressure-Treated Ground Contact Pine</a> <span style="font-size:11px;color:var(--color-neutral-600)">↗ #3612</span></div>
+              <div style="font-size:11.5px;color:var(--color-neutral-700)">Pressure Treated · SKU 1000123456</div>
+              <div style="font-size:11.5px;color:var(--color-accent-700)">▾ 2 of 2 Home Depot stores</div>
+            </div>
+            <div style="width:104px;text-align:right"><div style="font-weight:600;font-size:15px">$3.47 – $5.12</div><div style="font-size:11px;text-decoration:line-through;color:var(--color-neutral-600)">$11.98</div></div>
+            <div style="width:96px;display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--color-neutral-700)">
+              <span style="font-weight:600;color:var(--color-text)">2h ago</span>
+              <span>Aug 31 · 4:12p</span>
+            </div>
+            <span class="tag tag-accent" style="font-size:11.5px">62–71%</span>
+            <div style="display:flex;gap:6px;flex:none">
+              <button class="btn btn-primary" style="font-size:12px;padding:6px 10px">Want</button>
+              <div style="display:flex"><button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;border-right:none">Not interested</button><button class="btn btn-secondary" style="font-size:12px;padding:6px 7px" title="Not yet — re-alert at a deeper discount">▾</button></div>
+            </div>
+          </div>
+          <div style="padding:0 16px 10px 80px;display:flex;flex-direction:column;gap:1px;font-size:12px">
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;background:var(--color-neutral-100)">
+              <a href="#2a" style="width:150px;font-weight:600">Chapel Hill #3612 ↗</a>
+              <span style="color:var(--color-neutral-700);flex:1">Aisle 12 / Bay 004 · 4 left</span>
+              <span style="width:104px;color:var(--color-neutral-700)">detected 2h ago</span>
+              <span style="font-weight:600;width:60px;text-align:right">$3.47</span>
+              <button class="btn btn-secondary" style="font-size:11.5px;padding:4px 9px">Add to this store's list</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;background:var(--color-neutral-100)">
+              <a href="#2a" style="width:150px;font-weight:600">Cary #3608 ↗</a>
+              <span style="color:var(--color-neutral-700);flex:1">Aisle 09 / Bay 011 · 26 left</span>
+              <span style="width:104px;color:var(--color-neutral-700)">detected 3h ago</span>
+              <span style="font-weight:600;width:60px;text-align:right">$5.12</span>
+              <button class="btn btn-secondary" style="font-size:11.5px;padding:4px 9px">Add to this store's list</button>
+            </div>
+            <div style="padding:4px 8px;font-size:11px;color:var(--color-neutral-600)">Store name links to that store's product page directly; the title above uses the cheapest store.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200)">
+          <div style="width:52px;height:52px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:13.5px"><a href="#2a" style="font-weight:600;text-decoration:none">4×4×8 Pressure-Treated Post</a> <span style="font-size:11px;color:var(--color-neutral-600)">↗ #3612</span></div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">Pressure Treated · SKU 1000998877</div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">▸ Chapel Hill #3612 · Aisle 12 / Bay 007 · 26 left</div>
+          </div>
+          <div style="width:104px;text-align:right"><div style="font-weight:600;font-size:15px">$5.12</div><div style="font-size:11px;text-decoration:line-through;color:var(--color-neutral-600)">$19.47</div></div>
+          <div style="width:96px;display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--color-neutral-700)">
+            <span style="font-weight:600;color:var(--color-text)">yesterday</span>
+            <span>Aug 30 · 9:40a</span>
+          </div>
+          <span class="tag tag-accent" style="font-size:11.5px">74%</span>
+          <div style="display:flex;gap:6px;flex:none">
+            <button class="btn btn-primary" style="font-size:12px;padding:6px 10px">Want</button>
+            <div style="display:flex"><button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;border-right:none">Not interested</button><button class="btn btn-primary" style="font-size:12px;padding:6px 7px">▾</button></div>
+          </div>
+        </div>
+
+        <div style="padding:0 16px 12px 16px;border-bottom:1px solid var(--color-neutral-200);display:flex;justify-content:flex-end">
+          <div class="blueprint" style="width:330px;padding:12px 14px;background:var(--color-bg);box-shadow:var(--shadow-md)">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-600);margin-bottom:9px">NOT YET — TELL ME AGAIN WHEN…</div>
+            <div style="display:flex;flex-direction:column;gap:7px;font-size:12.5px">
+              <label style="display:flex;align-items:center;gap:8px"><input type="radio" name="notyet-2a" checked="checked" style="accent-color:var(--color-accent)">Discount reaches<select style="font-size:12px;padding:3px 6px;border:1px solid var(--color-neutral-300);border-radius:var(--radius-sm);background:transparent"><option>85%</option></select>or better</label>
+              <label style="display:flex;align-items:center;gap:8px"><input type="radio" name="notyet-2a" style="accent-color:var(--color-accent)">Price drops below<input class="input" value="$3.00" style="width:76px;font-size:12px;padding:3px 6px"></label>
+              <label style="display:flex;align-items:center;gap:8px"><input type="radio" name="notyet-2a" style="accent-color:var(--color-accent)">It hits penny status</label>
+              <label style="display:flex;align-items:center;gap:8px"><input type="radio" name="notyet-2a" style="accent-color:var(--color-accent)">Never — hide this product for good</label>
+            </div>
+            <div style="display:flex;gap:7px;margin-top:11px">
+              <button class="btn btn-primary" style="font-size:12px;padding:6px 10px">Set threshold</button>
+              <button class="btn btn-ghost" style="font-size:12px;padding:6px 10px">Cancel</button>
+            </div>
+            <div style="margin-top:8px;font-size:11px;color:var(--color-neutral-700);line-height:1.45">Row leaves the feed and returns as new only if the threshold is met — at any store where it's met.</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200)">
+          <a href="#2a" style="width:52px;height:52px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></a>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:13.5px"><a href="#2a" style="font-weight:600;text-decoration:none">Cedar Fence Picket, 6 ft.</a> <span style="font-size:11px;color:var(--color-neutral-600)">↗ #3612</span></div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">Pressure Treated · SKU 1000334455</div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">Waiting for ≥80% off — now 55%. Re-alerts at $1.79 or lower.</div>
+          </div>
+          <div style="width:104px;text-align:right"><div style="font-weight:600;font-size:15px">$3.98</div><div style="font-size:11px;text-decoration:line-through;color:var(--color-neutral-600)">$8.97</div></div>
+          <div style="width:96px;display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--color-neutral-700)">
+            <span style="font-weight:600;color:var(--color-text)">4d ago</span>
+            <span>Aug 28 · 2:35p</span>
+          </div>
+          <span class="tag tag-neutral" style="font-size:11.5px">Not yet · 80%</span>
+          <div style="display:flex;gap:6px;flex:none">
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 10px">Change</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 10px">Never</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200)">
+          <div style="width:52px;height:52px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:13.5px"><a href="#2a" style="font-weight:600;text-decoration:none">Deck Joist Hanger, 20-pack</a> <span style="font-size:11px;color:var(--color-neutral-600)">↗ #3608</span></div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">Framing Hardware · SKU 1000445566</div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">▸ Cary #3608 · aisle unknown</div>
+          </div>
+          <div style="width:104px;text-align:right"><div style="font-weight:600;font-size:15px">$0.01</div></div>
+          <div style="width:96px;display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--color-neutral-700)">
+            <span style="font-weight:600;color:var(--color-text)">5h ago</span>
+            <span>Aug 31 · 11:05a</span>
+          </div>
+          <span class="tag tag-outline" style="font-size:11.5px">Penny</span>
+          <div style="display:flex;gap:6px;flex:none">
+            <button class="btn btn-primary" style="font-size:12px;padding:6px 10px">Want</button>
+            <div style="display:flex"><button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;border-right:none">Not interested</button><button class="btn btn-secondary" style="font-size:12px;padding:6px 7px" title="Not yet — re-alert at a deeper discount">▾</button></div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200);background:var(--color-neutral-100)">
+          <a href="#2a" style="width:52px;height:52px;flex:none;border:1px dashed var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></a>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:13.5px"><a href="#2a" style="font-weight:600;text-decoration:none">2×8×12 #2 Pressure-Treated Joist</a> <span style="font-size:11px;color:var(--color-neutral-600)">↗ #3612</span></div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">Pressure Treated · SKU 1000771122</div>
+            <div style="font-size:11.5px;color:var(--color-neutral-700)">Flagged as upcoming clearance — price still full. Checked every 2h, last 14m ago.</div>
+          </div>
+          <div style="width:104px;text-align:right"><div style="font-weight:600;font-size:15px">$16.98</div><div style="font-size:11px;color:var(--color-neutral-600)">no drop yet</div></div>
+          <div style="width:96px;display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--color-neutral-700)">
+            <span style="font-weight:600;color:var(--color-text)">3d ago</span>
+            <span>Aug 29 · 6:20p</span>
+          </div>
+          <span class="tag tag-neutral" style="font-size:11.5px">Watching</span>
+          <div style="display:flex;gap:6px;flex:none">
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 10px">Close eye</button>
+            <div style="display:flex"><button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;border-right:none">Not interested</button><button class="btn btn-secondary" style="font-size:12px;padding:6px 7px" title="Not yet — re-alert at a deeper discount">▾</button></div>
+          </div>
+        </div>
+        <div style="padding:14px 16px;font-size:12.5px;color:var(--color-neutral-600)">28 more · <span style="font-family:ui-monospace,monospace">J</span>/<span style="font-family:ui-monospace,monospace">K</span> move · <span style="font-family:ui-monospace,monospace">W</span> want · <span style="font-family:ui-monospace,monospace">D</span> never show again</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="dv-opt" id="2c">
+<div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a>Mobile — scanning list. Swipe right to add, left to dismiss; both directions shown mid-swipe below.</div>
+<div class="blueprint" style="width:390px;padding:0;display:flex;flex-direction:column;height:800px;background:var(--color-bg)">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div style="padding:14px 16px 10px;border-bottom:1px solid var(--color-neutral-300);display:flex;flex-direction:column;gap:9px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-family:var(--font-heading);font-weight:700;font-size:18px;letter-spacing:.03em">DEALS</div>
+      <div style="font-size:12px;color:var(--color-neutral-700)">31 · 9 new</div>
+    </div>
+    <div style="display:flex;gap:6px;overflow:hidden;font-size:12px">
+      <span class="tag tag-accent" style="white-space:nowrap;background:var(--color-accent);color:var(--color-bg);font-weight:600">Home Depot 104</span>
+      <span class="tag tag-outline" style="white-space:nowrap">Best Buy 44</span>
+      <span class="tag tag-outline" style="white-space:nowrap">Lowe's 0</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--color-neutral-300);border-radius:var(--radius-sm);font-size:12px">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Lumber › Dimensional · all stores</span><span style="color:var(--color-accent-700);font-weight:600">Edit</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--color-neutral-600)">
+      <span>← left: dismiss · long-swipe left: not yet</span><span>right: add to list →</span>
+    </div>
+  </div>
+
+  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:8px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">PRESSURE TREATED · 23</div>
+
+    <div style="display:flex;gap:11px;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200)">
+      <div style="width:64px;height:64px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+        <div style="font-weight:600;font-size:13.5px;line-height:1.25">2×6×8 #2 Pressure-Treated Ground Contact Pine</div>
+        <div style="display:flex;align-items:baseline;gap:7px"><span style="font-weight:600;font-size:15px">$3.47</span><span class="tag tag-accent" style="font-size:11px">71%</span></div>
+        <div style="font-size:11.5px;color:var(--color-neutral-700)">#3612 · Aisle 12/004 · 4 left</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:stretch;border-bottom:1px solid var(--color-neutral-200);background:var(--color-accent)">
+      <div style="width:104px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--color-bg)">
+        <div style="font-size:15px">＋</div>
+        <div style="font-size:12px;font-weight:600;text-align:center;line-height:1.2">Adding<br><span style="font-weight:400;opacity:.85">mid-swipe</span></div>
+      </div>
+      <div style="display:flex;gap:11px;padding:11px 16px 11px 0;flex:1;min-width:0;background:var(--color-bg);transform:translateX(0)">
+        <div style="width:64px;height:64px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px);margin-left:16px"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+          <div style="font-weight:600;font-size:13.5px;line-height:1.25">4×4×8 Pressure-Treated Post</div>
+          <div style="display:flex;align-items:baseline;gap:7px"><span style="font-weight:600;font-size:15px">$5.12</span><span class="tag tag-accent" style="font-size:11px">74%</span></div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">2 stores · pick store on add</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:stretch;border-bottom:1px solid var(--color-neutral-200);background:var(--color-neutral-400);overflow:hidden">
+      <div style="display:flex;gap:11px;padding:11px 0 11px 16px;flex:1;min-width:0;background:var(--color-bg);margin-left:-72px">
+        <div style="width:64px;height:64px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+          <div style="font-weight:600;font-size:13.5px;line-height:1.25">5/4×6×8 Pressure-Treated Deck Board</div>
+          <div style="display:flex;align-items:baseline;gap:7px"><span style="font-weight:600;font-size:15px">$2.98</span><span class="tag tag-accent" style="font-size:11px">68%</span></div>
+          <div style="font-size:11.5px;color:var(--color-neutral-700)">#3612 · Aisle 12/002 · 61 left</div>
+        </div>
+      </div>
+      <div style="width:104px;flex:none;background:var(--color-neutral-400);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--color-neutral-900)">
+        <div style="font-size:15px">×</div>
+        <div style="font-size:12px;font-weight:600;text-align:center;line-height:1.2">Dismissing<br><span style="font-weight:400;opacity:.75">mid-swipe</span></div>
+      </div>
+    </div>
+
+    <div style="padding:8px 16px;background:var(--color-neutral-100);font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--color-neutral-700)">KILN-DRIED · 8</div>
+    <div style="display:flex;gap:11px;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200)">
+      <div style="width:64px;height:64px;flex:none;border:1px solid var(--color-neutral-400);background:repeating-linear-gradient(45deg,var(--color-neutral-200) 0 3px,transparent 3px 7px)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+        <div style="font-weight:600;font-size:13.5px;line-height:1.25">2×4×8 KD-HT Whitewood Stud</div>
+        <div style="display:flex;align-items:baseline;gap:7px"><span style="font-weight:600;font-size:15px">$1.24</span><span class="tag tag-accent" style="font-size:11px">64%</span></div>
+        <div style="font-size:11.5px;color:var(--color-neutral-700)">#3608 · Aisle 09/003 · 140 left</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:11px;padding:11px 16px;border-bottom:1px solid var(--color-neutral-200);align-items:center;background:var(--color-neutral-100)">
+      <div style="width:64px;height:64px;flex:none;border:1px dashed var(--color-neutral-400)"></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+        <div style="font-weight:600;font-size:13.5px;line-height:1.25;color:var(--color-neutral-700)">Cedar Fence Picket, 6 ft.</div>
+        <div style="font-size:11.5px;color:var(--color-neutral-700)">Not yet — re-alert at 80% off (now 55%)</div>
+      </div>
+      <span class="tag tag-neutral" style="font-size:11px">80%</span>
+    </div>
+    <div style="padding:11px 16px;font-size:12px;color:var(--color-neutral-600)">Dismissed 2 · 1 waiting for a deeper cut · <a href="#2c">undo</a></div>
+  </div>
+
+  <div style="padding:11px 16px 18px;border-top:1px solid var(--color-neutral-300);display:flex;justify-content:space-between;font-size:12px">
+    <span style="font-weight:600;border-bottom:2px solid var(--color-accent);padding-bottom:3px">Deals</span>
+    <span style="color:var(--color-neutral-700)">Lists 3</span>
+    <span style="color:var(--color-neutral-700)">History</span>
+    <span style="color:var(--color-neutral-700)">Scanner</span>
+  </div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Swipe is one continuous motion — the colored panel is the trail behind the row, not a button. Try next: "design the shopping lists off <a class="dv-oid" href="#2a">2a</a>"</p>
+</section>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><link rel="stylesheet" href="web/frontend/style.css"><style>body{margin:0}</style></helmet>
+<div>
+  <header class="topbar">
+    <h1>🛒 Clearance Scout</h1>
+    <div class="scan-status">
+      <span class="progress-detail">Store 2/4 (Cary #3612) · Dept 7/19 "Lumber" 84/220</span>
+      <span class="badge scanning">Scanning…</span>
+      <button disabled="disabled">Scanning…</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active">Deals</button>
+    <button class="tab-btn">Shopping List</button>
+    <button class="tab-btn">History</button>
+    <button class="tab-btn">Browser</button>
+    <button class="tab-btn">Logs</button>
+    <button class="tab-btn">Settings</button>
+  </nav>
+
+  <main>
+    <section class="tab-panel active">
+      <div class="filters">
+        <input type="search" placeholder="Search products…">
+        <select><option>Building Materials</option></select>
+        <select><option>All in this department</option></select>
+        <select><option>All stores</option></select>
+        <label><input type="checkbox"> Clearance only</label>
+        <label><input type="checkbox"> Penny only</label>
+        <input type="number" placeholder="Min % off">
+        <select><option>Most recent</option></select>
+      </div>
+      <div class="table-wrap">
+        <table class="deal-table">
+          <thead>
+            <tr>
+              <th>Image</th><th>Product</th><th>Price</th><th>Discount</th>
+              <th>Added</th><th>Locations</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="thumb" style="background:#fafafa"></div></td>
+              <td>
+                <div class="product-name">2 in. x 6 in. x 8 ft. #2 Pressure-Treated Ground Contact Southern Pine Lumber</div>
+                <div class="product-dept">Dimensional Lumber</div>
+              </td>
+              <td>$3.47 – $5.12</td>
+              <td><span class="discount-badge">62%–71%</span></td>
+              <td>2h ago</td>
+              <td>3 Stores</td>
+              <td class="action-col">
+                <button class="save-btn">Save</button>
+                <button class="secondary share-btn">Share Link</button>
+              </td>
+            </tr>
+            <tr>
+              <td><div class="thumb" style="background:#fafafa"></div></td>
+              <td>
+                <div class="product-name">Southwire 250 ft. 12/2 Solid Romex SIMpull CU NM-B W/G Wire</div>
+                <div class="product-dept">Electrical Wire</div>
+              </td>
+              <td>$0.01</td>
+              <td><span class="discount-badge penny">Penny</span></td>
+              <td>5h ago</td>
+              <td>1 Store</td>
+              <td class="action-col">
+                <button class="save-btn">Save</button>
+                <button class="secondary share-btn">Share Link</button>
+              </td>
+            </tr>
+            <tr>
+              <td><div class="thumb" style="background:#fafafa"></div></td>
+              <td>
+                <div class="product-name">Husky 27 in. 5-Drawer Rolling Tool Cabinet, Matte Black</div>
+                <div class="product-dept">Tool Storage</div>
+              </td>
+              <td>$148.00</td>
+              <td><span class="discount-badge">40%</span></td>
+              <td>1d ago</td>
+              <td>2 Stores</td>
+              <td class="action-col">
+                <button class="save-btn">Save</button>
+                <button class="secondary share-btn">Share Link</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="build-footer">Build: <span>2026-09-01T14:22Z</span></footer>
+</div>
+
+<div class="modal" style="position:relative;inset:auto;padding:28px 0 40px">
+  <div class="modal-content">
+    <button class="modal-close">×</button>
+    <div>
+      <h2>2 in. x 6 in. x 8 ft. #2 Pressure-Treated Ground Contact Southern Pine Lumber</h2>
+      <p class="meta">SKU 1000123456</p>
+      <div class="table-wrap">
+        <table class="detail-table">
+          <thead>
+            <tr>
+              <th>Image</th><th>Product</th><th>Price</th><th>Discount</th>
+              <th>Address</th><th>Store</th><th>Stock</th><th>Added</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="thumb" style="background:#fafafa"></div></td>
+              <td>
+                <div class="product-name">2 in. x 6 in. x 8 ft. #2 Pressure-Treated Lumber</div>
+                <div class="product-dept">Dimensional Lumber</div>
+                <a class="store-address-link" href="#">View item →</a>
+              </td>
+              <td>$3.47<div class="product-dept">was $11.98</div></td>
+              <td><span class="discount-badge">71%</span></td>
+              <td><a class="store-address-link" href="#">2540 E Franklin St, Chapel Hill, NC</a></td>
+              <td>3612<div class="product-dept">Aisle 12/Bay 004</div></td>
+              <td><span class="stock-dot low"></span>4 left</td>
+              <td>2h ago</td>
+              <td class="action-col">
+                <button class="row-save-btn">Save</button>
+                <button class="secondary row-bought-btn">Bought</button>
+                <button class="secondary row-dismiss-btn">Dismiss</button>
+              </td>
+            </tr>
+            <tr>
+              <td><div class="thumb" style="background:#fafafa"></div></td>
+              <td>
+                <div class="product-name">2 in. x 6 in. x 8 ft. #2 Pressure-Treated Lumber</div>
+                <div class="product-dept">Dimensional Lumber</div>
+                <a class="store-address-link" href="#">View item →</a>
+              </td>
+              <td>$5.12<div class="product-dept">was $11.98</div></td>
+              <td><span class="discount-badge">62%</span></td>
+              <td><a class="store-address-link" href="#">1000 Ryan Rd, Cary, NC</a></td>
+              <td>3608<div class="product-dept">Aisle 09/Bay 011</div></td>
+              <td><span class="stock-dot ok"></span>26 left</td>
+              <td>3h ago</td>
+              <td class="action-col">
+                <button class="row-save-btn">Save</button>
+                <button class="secondary row-bought-btn">Bought</button>
+                <button class="secondary row-dismiss-btn">Dismiss</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary">Share Link</button>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
