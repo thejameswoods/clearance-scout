@@ -17,7 +17,6 @@ ENV_DEFAULTS = {
     "watched_departments": None,
     "watch_keywords": None,
     "scan_interval_minutes": 240.0,
-    "scan_on_startup": True,
     "product_list_cache_hours": 24.0,
 }
 

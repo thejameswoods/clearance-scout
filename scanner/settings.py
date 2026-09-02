@@ -36,7 +36,6 @@ def merge_settings(env_defaults: dict[str, Any], override: dict[str, Any] | None
             else env_defaults["watch_keywords"]
         ),
         "scan_interval_minutes": override.get("scan_interval_minutes", env_defaults["scan_interval_minutes"]),
-        "scan_on_startup": override.get("scan_on_startup", env_defaults["scan_on_startup"]),
         "product_list_cache_hours": override.get(
             "product_list_cache_hours", env_defaults["product_list_cache_hours"]
         ),

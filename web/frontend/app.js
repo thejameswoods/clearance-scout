@@ -1031,7 +1031,6 @@ function scanConfigFormHtml(scanConfig) {
       <label>Watched departments <input type="text" id="cfg-departments" placeholder="blank = all departments" value="${escapeHtml(joined(scanConfig.watched_departments))}"></label>
       <label>Watch keywords <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml(joined(scanConfig.watch_keywords))}"></label>
       <label>Scan interval (min, 0 = manual only) <input type="number" id="cfg-interval" min="0" step="1" value="${scanConfig.scan_interval_minutes ?? ""}"></label>
-      <label class="checkbox-label"><input type="checkbox" id="cfg-startup" ${scanConfig.scan_on_startup ? "checked" : ""}> Scan on container startup <span class="meta">(takes effect on next restart, not this save)</span></label>
       <label>Product list cache (hours) <input type="number" id="cfg-cache-hours" min="0" step="1" value="${scanConfig.product_list_cache_hours ?? ""}"></label>
       <div class="modal-actions">
         <button type="submit">Save</button>
@@ -1058,7 +1057,6 @@ function setupScanConfigForm() {
           watched_departments: $("#cfg-departments").value.trim(),
           watch_keywords: $("#cfg-keywords").value.trim(),
           scan_interval_minutes: Number($("#cfg-interval").value),
-          scan_on_startup: $("#cfg-startup").checked,
           product_list_cache_hours: Number($("#cfg-cache-hours").value),
         }),
       });

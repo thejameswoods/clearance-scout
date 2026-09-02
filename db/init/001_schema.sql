@@ -170,7 +170,6 @@ CREATE TABLE scanner_settings (
     watched_departments      TEXT,  -- comma-separated, same format as the env var
     watch_keywords           TEXT,
     scan_interval_minutes    DOUBLE PRECISION,
-    scan_on_startup          BOOLEAN,
     product_list_cache_hours DOUBLE PRECISION,
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );

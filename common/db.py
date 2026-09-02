@@ -478,7 +478,7 @@ def set_credential_session_status(conn, retailer_id: int, status: str, session_l
 
 SCANNER_SETTINGS_FIELDS = (
     "zip_code", "radius_miles", "watched_departments", "watch_keywords",
-    "scan_interval_minutes", "scan_on_startup", "product_list_cache_hours",
+    "scan_interval_minutes", "product_list_cache_hours",
 )
 
 

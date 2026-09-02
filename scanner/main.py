@@ -56,17 +56,6 @@ ENV_DEFAULTS = {
     # was already fighting. Useful default for production; actively
     # unhelpful while iterating or investigating a specific problem.
     "scan_interval_minutes": float(os.environ.get("SCAN_INTERVAL_MINUTES", "240")),
-    # Every container start otherwise kicks off a full scan immediately,
-    # which is right for production (resume after a crash/restart) but
-    # actively hostile to iterating on code -- confirmed live 2026-08-31:
-    # a normal redeploy re-triggered the same multi-hour scan that had
-    # just caused an OOM incident, seconds after the fix for it shipped.
-    # Set false while actively developing; "Scan now" (dashboard/bot)
-    # still works regardless. NOTE: unlike the other settings, a
-    # dashboard-saved override for this one only takes effect on the
-    # *next container start* -- it's read exactly once, at the top of
-    # main()'s loop, before there's a "next scan" to defer.
-    "scan_on_startup": os.environ.get("SCAN_ON_STARTUP", "true").lower() not in ("false", "0", ""),
     "product_list_cache_hours": float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24")),
 }
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
@@ -360,7 +349,6 @@ def main() -> None:
                 logger.exception("Error closing old browser context (continuing anyway)")
             return _launch_browser_ctx(playwright)
 
-        first_iteration = True
         while True:
             settings = _current_settings()  # fresh each cycle -- see that function's docstring
             department_filter = None
@@ -385,19 +373,11 @@ def main() -> None:
                     browser_ctx, trigger="manual", department_filter=department_filter, store_ids=store_ids,
                     recycle_browser_ctx=recycle_browser_ctx,
                 )
-            elif first_iteration and not settings["scan_on_startup"]:
-                logger.info(
-                    "scan_on_startup=false -- skipping the immediate scan; "
-                    "waiting for a manual trigger or the next scheduled interval"
-                )
-                with _status_lock:
-                    _status["state"] = "idle"
             else:
                 browser_ctx = _scan_all(
                     browser_ctx, trigger="scheduled", department_filter=None,
                     recycle_browser_ctx=recycle_browser_ctx,
                 )
-            first_iteration = False
 
             if settings["scan_interval_minutes"] <= 0:
                 # Scheduled auto-rescan disabled -- wait indefinitely for a

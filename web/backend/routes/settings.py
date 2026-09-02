@@ -29,7 +29,6 @@ class ScanConfigUpdate(BaseModel):
     watched_departments: str | None = None
     watch_keywords: str | None = None
     scan_interval_minutes: float | None = None
-    scan_on_startup: bool | None = None
     product_list_cache_hours: float | None = None
 
 
