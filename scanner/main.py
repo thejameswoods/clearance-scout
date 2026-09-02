@@ -20,7 +20,13 @@ from patchright.sync_api import sync_playwright
 from adapters.registry import build_adapter
 from common import db
 from scanner.log_buffer import RingBufferLogHandler
-from scanner.orchestrator import ScanAbortedNeedsLogin, refresh_single_product, repair_missing_enrichment, run_scan
+from scanner.orchestrator import (
+    ScanAbortedNeedsLogin,
+    refresh_single_product,
+    repair_missing_enrichment,
+    rescan_stores,
+    run_scan,
+)
 from scanner.settings import merge_settings, split_list
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -85,6 +91,15 @@ _repair_trigger_event = threading.Event()
 _repair_limit: int | None = None
 _repair_status = {"state": "idle", "last_run_result": None}
 DEFAULT_REPAIR_LIMIT = 50  # an on-demand tool hitting a real retailer API -- default to a conservative batch, not "however many are missing."
+
+# Settings panel's "Rescan store list" -- same shared-browser-context,
+# one-at-a-time posture as repair above, keyed by which retailer's store
+# list to refresh (there's no queue here since re-clicking for the same
+# retailer while one's already running is a harmless no-op to coalesce,
+# unlike the refresh queue's distinct per-product requests below).
+_rescan_stores_trigger_event = threading.Event()
+_rescan_stores_slug: str | None = None
+_rescan_stores_status = {"state": "idle", "last_run_result": None}
 
 # "Refresh this one item everywhere" -- a real QUEUE (list), not a single
 # trigger flag like the ones above, specifically so someone can "mash the
@@ -164,6 +179,20 @@ def repair_missing_data(limit: int | None = DEFAULT_REPAIR_LIMIT):
 def repair_status():
     with _status_lock:
         return dict(_repair_status)
+
+
+@app.post("/rescan-stores")
+def rescan_stores_trigger(retailer: str):
+    global _rescan_stores_slug
+    _rescan_stores_slug = retailer
+    _rescan_stores_trigger_event.set()
+    return {"triggered": True}
+
+
+@app.get("/rescan-stores-status")
+def rescan_stores_status():
+    with _status_lock:
+        return dict(_rescan_stores_status)
 
 
 @app.post("/refresh-product")
@@ -290,6 +319,41 @@ def _repair_all(browser_ctx, limit: int | None):
     return browser_ctx
 
 
+def _rescan_stores_one(browser_ctx, slug: str):
+    with _status_lock:
+        _rescan_stores_status["state"] = "running"
+
+    adapter = build_adapter(slug)
+    try:
+        with db.get_connection() as conn:
+            retailer_row = db.get_retailer_by_slug(conn, slug)
+            settings = (
+                _current_settings(retailer_row["id"]) if retailer_row is not None
+                else merge_settings(ENV_DEFAULTS, None)
+            )
+            result = rescan_stores(conn, browser_ctx, adapter, settings["zip_code"], radius_miles=settings["radius_miles"])
+        logger.info("Rescan stores complete for %s: %s", slug, result)
+        with _status_lock:
+            _rescan_stores_status["last_run_result"] = {slug: result}
+    except ScanAbortedNeedsLogin:
+        logger.warning(
+            "%s session needs login — open the dashboard's Browser tab and log in manually.", slug
+        )
+        with _status_lock:
+            _rescan_stores_status["last_run_result"] = {slug: "needs_login"}
+    except Exception:
+        # Same posture as _scan_all/_repair_all -- never crash the process
+        # over a single bad run.
+        logger.exception("%s store rescan failed unexpectedly", slug)
+        with _status_lock:
+            _rescan_stores_status["last_run_result"] = {slug: "error"}
+
+    with _status_lock:
+        _rescan_stores_status["state"] = "idle"
+
+    return browser_ctx
+
+
 def _refresh_one(browser_ctx, product_id: int):
     with db.get_connection() as conn:
         row = conn.execute(
@@ -379,6 +443,12 @@ def main() -> None:
                     product_id = _refresh_queue.pop(0)
                     _refresh_status[product_id] = {"state": "running", "result": None}
                 browser_ctx = _refresh_one(browser_ctx, product_id)
+            elif _rescan_stores_trigger_event.is_set():
+                # Also ahead of repair/scan -- just a store-locator call,
+                # not a real scan, so it shouldn't wait behind either.
+                slug = _rescan_stores_slug
+                _rescan_stores_trigger_event.clear()
+                browser_ctx = _rescan_stores_one(browser_ctx, slug)
             elif _repair_trigger_event.is_set():
                 limit = _repair_limit
                 _repair_trigger_event.clear()

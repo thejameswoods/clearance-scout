@@ -116,3 +116,23 @@ def test_put_store_enabled_toggle(client, postgres_conn, retailer_id):
 
     assert resp.status_code == 200
     assert db.get_disabled_store_ids(postgres_conn, retailer_id) == {"3612"}
+
+
+def test_rescan_stores_404s_for_unknown_retailer(client):
+    resp = client.post("/api/settings/retailers/999999/rescan-stores")
+    assert resp.status_code == 404
+
+
+def test_rescan_stores_degrades_gracefully_when_scanner_unreachable(client, retailer_id):
+    # No scanner container in this test environment -- the route should
+    # report the failure in the body, not raise, matching every other
+    # scanner-proxy route in this file's module.
+    resp = client.post(f"/api/settings/retailers/{retailer_id}/rescan-stores")
+    assert resp.status_code == 200
+    assert resp.json()["triggered"] is False
+
+
+def test_rescan_stores_status_degrades_gracefully_when_scanner_unreachable(client, retailer_id):
+    resp = client.get(f"/api/settings/retailers/{retailer_id}/rescan-stores/status")
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "unreachable"

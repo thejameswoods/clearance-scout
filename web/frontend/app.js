@@ -1128,13 +1128,17 @@ async function loadSettings() {
 function renderSettingsSidebar() {
   const retailerTree = $("#settings-retailer-tree");
   retailerTree.innerHTML = settingsState.retailers.length
-    ? settingsState.retailers.map((r) => `
-        <div class="settings-tree-row ${settingsState.nav.type === "retailer" && settingsState.nav.id === r.id ? "selected" : ""}" data-retailer-id="${r.id}">
-          <span class="settings-enabled-dot ${r.enabled ? "" : "off"}"></span>
-          <span class="settings-tree-name">${escapeHtml(r.display_name)}</span>
-          <span class="settings-tree-meta">${r.store_count} store${r.store_count === 1 ? "" : "s"}</span>
-        </div>
-      `).join("")
+    ? settingsState.retailers.map((r) => {
+        const subtitle = r.store_count
+          ? `${r.store_count} store${r.store_count === 1 ? "" : "s"} · ${r.enabled ? "enabled" : "disabled"}`
+          : "not connected";
+        return `
+          <div class="settings-tree-row ${settingsState.nav.type === "retailer" && settingsState.nav.id === r.id ? "selected" : ""}" data-retailer-id="${r.id}">
+            <span class="settings-tree-row-name"><span class="settings-enabled-dot ${r.enabled ? "" : "off"}"></span>${escapeHtml(r.display_name)}</span>
+            <span class="settings-tree-meta">${subtitle}</span>
+          </div>
+        `;
+      }).join("")
     : `<p class="meta">None configured yet</p>`;
   retailerTree.querySelectorAll(".settings-tree-row").forEach((row) =>
     row.addEventListener("click", () => {
@@ -1222,6 +1226,10 @@ function renderSettingsRetailerPanel(detail) {
       <div class="settings-store-list">
         ${detail.stores.length ? detail.stores.map(settingsStoreRowHtml).join("") : `<p class="meta">No stores discovered yet.</p>`}
       </div>
+      <div class="settings-rescan-row">
+        <a href="#" id="settings-rescan-stores-btn">Rescan store list</a>
+        <span id="settings-rescan-stores-status" class="meta"></span>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -1229,6 +1237,7 @@ function renderSettingsRetailerPanel(detail) {
       <div id="settings-dept-summary" class="settings-section-summary"></div>
       <input type="text" id="settings-dept-filter" class="settings-dept-filter" placeholder="Filter departments" />
       <div id="settings-dept-tree" class="settings-dept-tree"></div>
+      <p class="meta">"–" marks a parent with some but not all descendants selected.</p>
       <div class="modal-actions" style="margin-top:8px">
         <button id="settings-dept-save" type="button">Save departments</button>
         <span id="settings-dept-save-status" class="meta"></span>
@@ -1250,6 +1259,7 @@ function renderSettingsRetailerPanel(detail) {
 
   setupSettingsConfigForm(detail);
   setupSettingsStoreChecks();
+  setupSettingsRescanStores(detail);
   setupSettingsDeptTree(detail);
   setupSettingsDangerZone(detail);
 
@@ -1304,6 +1314,68 @@ function setupSettingsStoreChecks() {
       });
     })
   );
+}
+
+function setupSettingsRescanStores(detail) {
+  $("#settings-rescan-stores-btn").addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    const statusEl = $("#settings-rescan-stores-status");
+    statusEl.textContent = "Rescanning…";
+    try {
+      const res = await api(`/api/settings/retailers/${detail.id}/rescan-stores`, { method: "POST" });
+      if (!res.triggered) {
+        statusEl.textContent = `Failed to start: ${res.error || "unknown error"}`;
+        return;
+      }
+    } catch (e) {
+      statusEl.textContent = `Failed to start: ${e.message}`;
+      return;
+    }
+    await pollRescanStoresStatus(detail.id, statusEl);
+  });
+}
+
+async function pollRescanStoresStatus(retailerId, statusEl) {
+  // Re-lists just the store list -- much quicker than a real scan, but
+  // still a real request against the retailer's store locator, so this
+  // polls the same way pollRepairStatus does rather than assuming it's
+  // done in one round trip.
+  for (let i = 0; i < 60; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    let status;
+    try {
+      status = await api(`/api/settings/retailers/${retailerId}/rescan-stores/status`);
+    } catch (e) {
+      statusEl.textContent = `Lost track of progress: ${e.message}`;
+      return;
+    }
+    if (status.state === "running") continue;
+    const result = status.last_run_result;
+    const summary = result && typeof result === "object" ? Object.values(result)[0] : result;
+    if (summary && typeof summary === "object") {
+      statusEl.textContent = `Done -- ${summary.stores_found} store(s) found.`;
+    } else if (summary === "needs_login") {
+      statusEl.textContent = "Needs login -- open the Browser tab and log in.";
+    } else {
+      statusEl.textContent = `Finished (${summary || "no result"}).`;
+    }
+    // Distance/name/address may have changed -- refresh just the store
+    // list (only if still looking at this same retailer), not the whole
+    // panel: a full re-render would instantly wipe the status message
+    // above and any unsaved edits elsewhere in the form.
+    if (settingsState.nav.type === "retailer" && settingsState.nav.id === retailerId) {
+      const detail = await api(`/api/settings/retailers/${retailerId}`);
+      const listEl = $(".settings-store-list");
+      if (listEl) {
+        listEl.innerHTML = detail.stores.length
+          ? detail.stores.map(settingsStoreRowHtml).join("")
+          : `<p class="meta">No stores discovered yet.</p>`;
+        setupSettingsStoreChecks();
+      }
+    }
+    return;
+  }
+  statusEl.textContent = "Still running after 2 minutes -- check the Logs tab.";
 }
 
 function setupSettingsDangerZone(detail) {

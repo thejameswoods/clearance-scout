@@ -110,6 +110,31 @@ def update_store_enabled(store_id: int, update: StoreEnabledUpdate):
     return {"ok": True}
 
 
+@router.post("/retailers/{retailer_id}/rescan-stores")
+def rescan_stores(retailer_id: int):
+    # Cheap on-demand refresh of just the store list (distance/name/
+    # address, and picking up a newly opened/closed store) -- not a full
+    # scan, see scanner/orchestrator.py's rescan_stores.
+    with db.get_connection() as conn:
+        header = queries.retailer_detail(conn, retailer_id)
+    if not header:
+        raise HTTPException(status_code=404, detail="retailer not found")
+    try:
+        resp = httpx.post(f"{SCANNER_URL}/rescan-stores", params={"retailer": header["slug"]}, timeout=5)
+        return resp.json()
+    except httpx.HTTPError as exc:
+        return {"triggered": False, "error": str(exc)}
+
+
+@router.get("/retailers/{retailer_id}/rescan-stores/status")
+def rescan_stores_status(retailer_id: int):
+    try:
+        resp = httpx.get(f"{SCANNER_URL}/rescan-stores-status", timeout=5)
+        return resp.json()
+    except httpx.HTTPError:
+        return {"state": "unreachable"}
+
+
 class RetailerMinDiscountUpdate(BaseModel):
     min_discount_pct: float | None = None  # None clears the floor
 

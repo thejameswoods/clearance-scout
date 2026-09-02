@@ -356,6 +356,34 @@ def run_scan(
     }
 
 
+def rescan_stores(conn, browser_ctx, adapter: RetailerAdapter, zip_code: str, radius_miles: float = 25.0) -> dict:
+    """Settings panel's "Rescan store list" -- re-runs just store discovery
+    (adapter.find_stores) and upserts each into `store` (refreshing
+    distance/name/address), without touching departments, products, or
+    prices. A full run_scan() already does this as a side effect of
+    scanning every store, but that's a heavy way to answer "what stores
+    are in range right now" or to pick up a newly opened/closed store --
+    this is the cheap, on-demand version of just that one step."""
+    retailer_id = db.upsert_retailer(conn, adapter.retailer_slug, adapter.retailer_slug, "")
+
+    try:
+        adapter.authenticate(browser_ctx)
+    except NeedsLogin:
+        db.set_credential_session_status(conn, retailer_id, "needs_login")
+        raise ScanAbortedNeedsLogin()
+    db.set_credential_session_status(conn, retailer_id, "valid")
+
+    stores = list(adapter.find_stores(browser_ctx, zip_code, radius_miles))
+    for store_info in stores:
+        db.upsert_store(
+            conn, retailer_id, store_info.retailer_store_id, store_info.zip_code,
+            store_info.name, store_info.address, store_info.distance_miles,
+        )
+    logger.info("%s: rescanned store list, %d store(s) within %s miles of %s", adapter.retailer_slug, len(stores), radius_miles, zip_code)
+
+    return {"stores_found": len(stores)}
+
+
 def repair_missing_enrichment(
     conn, browser_ctx, adapter: RetailerAdapter, limit: int | None = None,
 ) -> dict:
