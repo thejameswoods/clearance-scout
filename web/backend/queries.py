@@ -100,12 +100,20 @@ def list_deals(
     where_sql = " AND ".join(clauses)
 
     order_sql = {
-        "recent": "d.updated_at DESC",
-        "oldest": "d.updated_at ASC",
+        # created_at, not updated_at -- updated_at is bumped on every
+        # re-observation of an already-known deal (see
+        # upsert_deal_from_observation), including a plain refresh that
+        # finds the same clearance price again. Sorting on it let a
+        # re-scanned old deal jump back to the top of "Newest" and bury
+        # actually-new finds (issue #6). created_at is set once, at deal
+        # creation, and is already what the frontend's own "new since last
+        # visit" badge keys off (see loadDeals's newCount).
+        "recent": "d.created_at DESC",
+        "oldest": "d.created_at ASC",
         "discount": "discount_pct DESC NULLS LAST",
         "price": "po.price_cents ASC",
         "stock": "po.stock_quantity DESC NULLS LAST",
-    }.get(sort, "d.updated_at DESC")
+    }.get(sort, "d.created_at DESC")
 
     rows = conn.execute(
         f"""
@@ -222,16 +230,33 @@ def retailer_store_tree(conn) -> list[dict[str, Any]]:
     product_id, store_id) -- but the retailer-level total is NOT simply
     the sum of its stores' counts (that double-counts a product on sale
     at more than one store, confirmed live 2026-09-01); it's a second,
-    separate count(DISTINCT product_id) query, not a Python sum."""
+    separate count(DISTINCT product_id) query, not a Python sum.
+
+    Applies the same retailer.min_discount_pct floor as status_bar_counts/
+    list_deals (penny items exempt) -- without it, these counts silently
+    included deals the list/status-tag views filter out by default, so the
+    sidebar could show e.g. "51" for a store with only 1 deal actually
+    visible (confirmed live 2026-09-07, issue #7)."""
+    floor_clause = """
+        AND (
+            po.is_penny
+            OR r.min_discount_pct IS NULL
+            OR (po.list_price_cents > 0
+                AND (100.0 * (po.list_price_cents - po.price_cents) / po.list_price_cents) >= r.min_discount_pct)
+        )
+    """
     rows = conn.execute(
-        """
+        f"""
         SELECT r.id AS retailer_id, r.slug AS retailer_slug, r.display_name AS retailer_name,
                s.id AS store_id, s.name AS store_name, s.retailer_store_id,
-               count(d.id) FILTER (WHERE d.status IN ('new', 'active') AND p.dismissed_at IS NULL) AS open_count
+               count(d.id) FILTER (
+                   WHERE d.status IN ('new', 'active') AND p.dismissed_at IS NULL {floor_clause}
+               ) AS open_count
         FROM retailer r
         JOIN store s ON s.retailer_id = r.id
         LEFT JOIN deal d ON d.store_id = s.id
         LEFT JOIN product p ON p.id = d.product_id
+        LEFT JOIN price_observation po ON po.id = d.latest_observation_id
         GROUP BY r.id, r.slug, r.display_name, s.id, s.name, s.retailer_store_id
         ORDER BY r.display_name, s.name
         """
@@ -240,11 +265,13 @@ def retailer_store_tree(conn) -> list[dict[str, Any]]:
     totals = {
         row["retailer_id"]: row["total"]
         for row in conn.execute(
-            """
+            f"""
             SELECT r.id AS retailer_id, count(DISTINCT d.product_id) AS total
             FROM retailer r
             JOIN product p ON p.retailer_id = r.id AND p.dismissed_at IS NULL
             JOIN deal d ON d.product_id = p.id AND d.status IN ('new', 'active')
+            JOIN price_observation po ON po.id = d.latest_observation_id
+            WHERE 1=1 {floor_clause}
             GROUP BY r.id
             """
         ).fetchall()
@@ -283,15 +310,30 @@ def department_tree_with_counts(conn, retailer_slug: str, store_id: int | None =
         params.append(store_id)
     params.append(retailer_slug)
 
+    # Same retailer.min_discount_pct floor as status_bar_counts/list_deals/
+    # retailer_store_tree (penny items exempt) -- without it these counts
+    # included deals the list/status-tag views filter out by default (see
+    # retailer_store_tree's docstring, issue #7).
+    floor_clause = """
+        AND (
+            po.is_penny
+            OR r.min_discount_pct IS NULL
+            OR (po.list_price_cents > 0
+                AND (100.0 * (po.list_price_cents - po.price_cents) / po.list_price_cents) >= r.min_discount_pct)
+        )
+    """
     own_counts = {
         row["name"]: row["open_count"]
         for row in conn.execute(
             f"""
-            SELECT dept.name, count(DISTINCT p.id) FILTER (WHERE d.id IS NOT NULL) AS open_count
+            SELECT dept.name, count(DISTINCT p.id) FILTER (
+                WHERE d.id IS NOT NULL {floor_clause}
+            ) AS open_count
             FROM department dept
             JOIN retailer r ON r.id = dept.retailer_id
             LEFT JOIN product p ON p.department_id = dept.id AND p.dismissed_at IS NULL
             LEFT JOIN deal d ON d.product_id = p.id AND d.status IN ('new', 'active') {store_clause}
+            LEFT JOIN price_observation po ON po.id = d.latest_observation_id
             WHERE r.slug = %s
             GROUP BY dept.name
             """,

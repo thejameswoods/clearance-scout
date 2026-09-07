@@ -76,6 +76,39 @@ def test_retailer_total_counts_a_multi_store_product_once(postgres_conn):
     assert per_store == {"s1": 1, "s2": 1}  # each store's own count is still correct
 
 
+def test_retailer_store_tree_applies_min_discount_floor(postgres_conn):
+    """Issue #7: the sidebar's per-store/retailer counts didn't apply
+    retailer.min_discount_pct, so they could show a much bigger number than
+    what the (floor-respecting) status tags and deal list actually display
+    for the same scope -- confirmed live 2026-09-07 (a store showing "51"
+    with only 1 deal actually visible once the floor was applied)."""
+    retailer_id, _, _, _ = _seed(postgres_conn, sku="below-floor", price_cents=950, list_price_cents=1000)  # 5% off
+    _seed(postgres_conn, retailer_slug="home_depot", store_id_str="store-1", sku="above-floor",
+          price_cents=500, list_price_cents=1000)  # 50% off
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 25)
+
+    tree = queries.retailer_store_tree(postgres_conn)
+
+    assert tree[0]["total"] == 1
+    assert tree[0]["stores"][0]["open_count"] == 1
+
+
+def test_retailer_store_tree_floor_exempts_penny_items(postgres_conn):
+    retailer_id, store_id, department_id, product_id = _seed(
+        postgres_conn, sku="penny-item", price_cents=1, list_price_cents=1000,
+    )
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 90)
+    obs_id = db.insert_price_observation(
+        postgres_conn, product_id, store_id, None, datetime.now(timezone.utc),
+        price_cents=1, list_price_cents=1000, is_clearance=False, is_penny=True,
+        fulfillment_state="in_stock", stock_quantity=5, raw_signal={},
+    )
+    db.upsert_deal_from_observation(postgres_conn, product_id, store_id, obs_id, False, True)
+
+    tree = queries.retailer_store_tree(postgres_conn)
+    assert tree[0]["total"] == 1
+
+
 # --- department_tree_with_counts -------------------------------------------
 
 def test_department_tree_rolls_counts_up_to_ancestors(postgres_conn):
@@ -146,6 +179,16 @@ def test_department_tree_scoped_to_one_store(postgres_conn):
     assert tree_for_b[0]["count"] == 0
 
 
+def test_department_tree_applies_min_discount_floor(postgres_conn):
+    """Same bug as retailer_store_tree (issue #7): department counts also
+    ignored retailer.min_discount_pct."""
+    retailer_id, _, _, _ = _seed(postgres_conn, sku="below-floor", price_cents=950, list_price_cents=1000)
+    db.set_retailer_min_discount_pct(postgres_conn, retailer_id, 25)
+
+    tree = queries.department_tree_with_counts(postgres_conn, "home_depot")
+    assert tree[0]["count"] == 0
+
+
 # --- status_bar_counts -------------------------------------------------------
 
 def test_status_bar_counts_buckets_correctly(postgres_conn):
@@ -193,6 +236,28 @@ def test_list_deals_sort_oldest_and_price(postgres_conn):
 
     rows = queries.list_deals(postgres_conn, sort="price")
     assert [r["retailer_product_id"] for r in rows] == ["low", "high"]
+
+
+def test_list_deals_sort_recent_ignores_plain_refresh(postgres_conn):
+    """Issue #6: "Newest" sorted on deal.updated_at, which a plain refresh
+    (re-observing the same still-clearance item, no real news) bumps just
+    like a genuinely new find -- so a re-scanned old deal could jump back to
+    the top and bury actually-new ones. Sorting on created_at (set once, at
+    deal creation) fixes it."""
+    _, store_id, _, older_product_id = _seed(postgres_conn, sku="older-deal")
+    _seed(postgres_conn, sku="newer-deal")
+
+    # Re-observe the older deal (a duplicate clearance find / refresh) --
+    # this bumps its updated_at well past the newer deal's.
+    obs_id = db.insert_price_observation(
+        postgres_conn, older_product_id, store_id, None, datetime.now(timezone.utc),
+        price_cents=500, list_price_cents=1000, is_clearance=True, is_penny=False,
+        fulfillment_state="in_stock", stock_quantity=5, raw_signal={},
+    )
+    db.upsert_deal_from_observation(postgres_conn, older_product_id, store_id, obs_id, True, False)
+
+    rows = queries.list_deals(postgres_conn, sort="recent")
+    assert [r["retailer_product_id"] for r in rows] == ["newer-deal", "older-deal"]
 
 
 # --- routes ------------------------------------------------------------------
