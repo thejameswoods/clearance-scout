@@ -44,6 +44,12 @@ def merge_settings(env_defaults: dict[str, Any], override: dict[str, Any] | None
         "product_list_cache_hours": override.get(
             "product_list_cache_hours", env_defaults["product_list_cache_hours"]
         ),
+        "department_discovery_cache_hours": override.get(
+            "department_discovery_cache_hours", env_defaults["department_discovery_cache_hours"]
+        ),
+        "store_discovery_cache_hours": override.get(
+            "store_discovery_cache_hours", env_defaults["store_discovery_cache_hours"]
+        ),
     }
 
 

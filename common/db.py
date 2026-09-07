@@ -121,6 +121,81 @@ def list_cached_products_for_department(conn, department_id: int) -> list[dict[s
     ).fetchall()
 
 
+# --- department/store discovery caching --------------------------------------
+# Same idea as the product-list cache above, applied to the two other
+# discovery phases (adapter.discover_departments/find_stores) that were
+# previously re-run live on every single scan for data that barely changes
+# -- confirmed live 2026-09-07 department discovery alone averaged ~27.65s
+# of every scan for an essentially-static category tree. Both are
+# retailer-scoped (discovery is retailer-wide, store-independent), matching
+# retailer.enabled/min_discount_pct's existing scope.
+
+def get_departments_last_discovered_at(conn, retailer_id: int) -> datetime | None:
+    row = conn.execute(
+        "SELECT departments_last_discovered_at FROM retailer WHERE id = %s", (retailer_id,)
+    ).fetchone()
+    return row["departments_last_discovered_at"] if row else None
+
+
+def mark_departments_discovered(conn, retailer_id: int) -> None:
+    conn.execute(
+        "UPDATE retailer SET departments_last_discovered_at = now() WHERE id = %s", (retailer_id,)
+    )
+
+
+def list_departments_for_retailer(conn, retailer_id: int) -> list[dict[str, Any]]:
+    """A Department only ever carries retailer_department_id/name in
+    practice (parent_department_id is never populated -- see
+    scanner/orchestrator.py's run_scan), so this loses nothing versus a
+    live discover_departments() call."""
+    return conn.execute(
+        "SELECT retailer_department_id, name FROM department WHERE retailer_id = %s",
+        (retailer_id,),
+    ).fetchall()
+
+
+def reset_department_discovery_cache(conn, retailer_slug: str | None = None) -> int:
+    """Manual busting for the department-discovery cache -- mirrors
+    reset_department_product_cache's shape/rationale, just one row (the
+    retailer's own timestamp) instead of a per-department update."""
+    if retailer_slug:
+        rows = conn.execute(
+            "UPDATE retailer SET departments_last_discovered_at = NULL WHERE slug = %s RETURNING id",
+            (retailer_slug,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "UPDATE retailer SET departments_last_discovered_at = NULL RETURNING id"
+        ).fetchall()
+    return len(rows)
+
+
+def get_stores_last_discovered_at(conn, retailer_id: int) -> datetime | None:
+    row = conn.execute(
+        "SELECT stores_last_discovered_at FROM retailer WHERE id = %s", (retailer_id,)
+    ).fetchone()
+    return row["stores_last_discovered_at"] if row else None
+
+
+def mark_stores_discovered(conn, retailer_id: int) -> None:
+    conn.execute(
+        "UPDATE retailer SET stores_last_discovered_at = now() WHERE id = %s", (retailer_id,)
+    )
+
+
+def list_stores_for_retailer(conn, retailer_id: int) -> list[dict[str, Any]]:
+    """Every store for this retailer, regardless of `enabled` -- the same
+    universe find_stores() conceptually returns. db.get_disabled_store_ids
+    is applied on top of `stores` further down in run_scan regardless of
+    whether it came from here or a live crawl, so filtering here would only
+    break "every discovered store's row stays current" for a disabled
+    store, without changing scan scope either way."""
+    return conn.execute(
+        "SELECT retailer_store_id, zip_code, name, address, distance_miles FROM store WHERE retailer_id = %s",
+        (retailer_id,),
+    ).fetchall()
+
+
 def upsert_product(conn, retailer_id: int, retailer_product_id: str, name: str,
                     department_id: int | None, upc: str | None, image_url: str | None,
                     canonical_url: str | None = None) -> int:
@@ -206,6 +281,73 @@ def insert_price_observation(conn, product_id: int, store_id: int, scan_run_id: 
          is_clearance, is_penny, fulfillment_state, stock_quantity, json.dumps(raw_signal)),
     ).fetchone()
     return row["id"]
+
+
+def get_latest_price_observation(conn, product_id: int, store_id: int) -> dict[str, Any] | None:
+    """The most recent price_observation row for this exact product/store
+    pair, if any -- backs record_price_observation's dedup check. Uses
+    idx_price_observation_product_store_time (product_id, store_id,
+    observed_at DESC), a dedicated index for this exact lookup -- the two
+    existing indexes on this table (product_id, observed_at) and (store_id,
+    observed_at) don't serve an exact-pair point lookup efficiently at
+    scale, and this runs on the hot path (up to once per price check)."""
+    return conn.execute(
+        """
+        SELECT id, price_cents, list_price_cents, is_clearance, is_penny,
+               fulfillment_state, stock_quantity
+        FROM price_observation
+        WHERE product_id = %s AND store_id = %s
+        ORDER BY observed_at DESC
+        LIMIT 1
+        """,
+        (product_id, store_id),
+    ).fetchone()
+
+
+def record_price_observation(conn, product_id: int, store_id: int, scan_run_id: int | None,
+                              observed_at: datetime, price_cents: int, list_price_cents: int | None,
+                              is_clearance: bool, is_penny: bool, fulfillment_state: str | None,
+                              stock_quantity: int | None,
+                              raw_signal: dict[str, Any]) -> tuple[int, bool]:
+    """Wraps insert_price_observation with a dedup check: confirmed live
+    2026-09-07 that 68% of all price_observation rows (360,805 of 530,649)
+    were exact duplicates of the immediately-prior check for the same
+    product/store -- pure "nothing changed" noise, since every scan checks
+    every product at every store unconditionally regardless of whether the
+    last check found anything different (that unconditional recheck is
+    correct and stays -- this only changes whether an unchanged result gets
+    ANOTHER row). Returns (observation_id, was_inserted); was_inserted=False
+    means the existing latest row was reused as-is, not that anything
+    failed.
+
+    The compared tuple is (price_cents, list_price_cents, is_clearance,
+    is_penny, fulfillment_state, stock_quantity) -- deliberately EXCLUDES
+    raw_signal (the raw diagnostic payload, not decision-relevant -- two
+    genuinely-identical checks can still carry incidental payload noise
+    like an embedded server timestamp, which would otherwise defeat the
+    dedup entirely) and deliberately INCLUDES stock_quantity (a stock-only
+    change, e.g. quantity ticking down with price unchanged, still counts
+    as a real change worth a new row -- this can make dedup less effective
+    for fast-moving stock, but that's a considered trade, not an oversight;
+    don't add a config toggle to exclude it).
+
+    Callers must still call db.upsert_deal_from_observation with whatever
+    observation_id comes back either way -- deal.last_checked_at/updated_at
+    correctly keep advancing on every scan regardless of was_inserted, and
+    db.increment_price_check_total is also unconditional either way (it
+    counts checks performed, not rows written)."""
+    prior = get_latest_price_observation(conn, product_id, store_id)
+    if prior is not None and (
+        prior["price_cents"], prior["list_price_cents"], prior["is_clearance"],
+        prior["is_penny"], prior["fulfillment_state"], prior["stock_quantity"],
+    ) == (price_cents, list_price_cents, is_clearance, is_penny, fulfillment_state, stock_quantity):
+        return prior["id"], False
+
+    observation_id = insert_price_observation(
+        conn, product_id, store_id, scan_run_id, observed_at, price_cents, list_price_cents,
+        is_clearance, is_penny, fulfillment_state, stock_quantity, raw_signal,
+    )
+    return observation_id, True
 
 
 def upsert_deal_from_observation(conn, product_id: int, store_id: int, observation_id: int,
@@ -643,7 +785,7 @@ def set_credential_session_status(conn, retailer_id: int, status: str, session_l
 
 SCANNER_SETTINGS_FIELDS = (
     "zip_code", "radius_miles", "watch_keywords", "exclude_keywords", "keyword_filter_mode",
-    "product_list_cache_hours",
+    "product_list_cache_hours", "department_discovery_cache_hours", "store_discovery_cache_hours",
 )
 
 

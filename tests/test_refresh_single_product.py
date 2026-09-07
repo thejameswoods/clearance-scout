@@ -129,6 +129,27 @@ def test_refresh_one_store_erroring_does_not_abort_the_others(postgres_conn):
     assert result == {"stores_total": 2, "checked": 1, "hits": 1, "errors": 1}
 
 
+def test_refresh_twice_with_unchanged_price_does_not_duplicate_the_observation(postgres_conn):
+    # Same dedup behavior as run_scan's price-check loop (see
+    # tests/test_price_observation_dedup.py) -- refresh_single_product goes
+    # through the same db.record_price_observation call.
+    _, product_id, (store_id,) = _seed_product(postgres_conn, sku="sku-1", store_ids=("store-a",))
+    dept = Department(retailer_department_id="", name="")
+    ref = ProductRef(retailer_product_id="sku-1", name="Test Widget", department=dept)
+    adapter = _RefreshFakeAdapter({
+        "store-a": _observation(ref, StoreInfo(retailer_store_id="store-a", zip_code="00000"), price_cents=300),
+    })
+
+    refresh_single_product(postgres_conn, browser_ctx=None, adapter=adapter, product_id=product_id)
+    refresh_single_product(postgres_conn, browser_ctx=None, adapter=adapter, product_id=product_id)
+
+    row_count = postgres_conn.execute(
+        "SELECT count(*) AS n FROM price_observation WHERE product_id = %s AND store_id = %s",
+        (product_id, store_id),
+    ).fetchone()["n"]
+    assert row_count == 1
+
+
 def test_refresh_unknown_product_raises(postgres_conn):
     adapter = _RefreshFakeAdapter({})
     try:

@@ -17,7 +17,14 @@ CREATE TABLE retailer (
     -- Admin on/off (Settings tab) -- independent of credential_session.status
     -- (auth health). A disabled retailer is skipped by the scanner's main
     -- loop entirely, without an env change/redeploy.
-    enabled           BOOLEAN NOT NULL DEFAULT true
+    enabled           BOOLEAN NOT NULL DEFAULT true,
+    -- department/store discovery caching (mirrors department.products_last_listed_at
+    -- below, applied to the other two discovery phases that used to re-run
+    -- live on every scan for data that barely changes -- see
+    -- scanner/orchestrator.py's run_scan and common/db.py's
+    -- get_departments_last_discovered_at / get_stores_last_discovered_at).
+    departments_last_discovered_at TIMESTAMPTZ,
+    stores_last_discovered_at      TIMESTAMPTZ
 );
 
 CREATE TABLE store (
@@ -112,6 +119,11 @@ CREATE TABLE price_observation (
 );
 CREATE INDEX idx_price_observation_product_time ON price_observation (product_id, observed_at DESC);
 CREATE INDEX idx_price_observation_store_time ON price_observation (store_id, observed_at DESC);
+-- Backs common/db.py's get_latest_price_observation (the dedup check in
+-- record_price_observation) -- an exact (product_id, store_id) point
+-- lookup that the two indexes above don't serve efficiently at scale,
+-- and this runs on the hot path (up to once per price check).
+CREATE INDEX idx_price_observation_product_store_time ON price_observation (product_id, store_id, observed_at DESC);
 
 -- The dashboard/bot's read model — derived from price_observation so nobody
 -- re-derives "is this still live" from raw rows on every page load.
@@ -236,6 +248,12 @@ CREATE TABLE scanner_settings (
     keyword_filter_mode      TEXT NOT NULL DEFAULT 'simple'
                               CHECK (keyword_filter_mode IN ('simple', 'regex')),
     product_list_cache_hours DOUBLE PRECISION,
+    -- Per-retailer overrides for the department/store discovery caches
+    -- (retailer.departments_last_discovered_at/stores_last_discovered_at
+    -- above) -- same override-or-env-default semantics as
+    -- product_list_cache_hours.
+    department_discovery_cache_hours DOUBLE PRECISION,
+    store_discovery_cache_hours      DOUBLE PRECISION,
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -58,6 +58,8 @@ ENV_DEFAULTS = {
     "exclude_keywords": split_list(os.environ.get("EXCLUDE_KEYWORDS")),
     "keyword_filter_mode": os.environ.get("KEYWORD_FILTER_MODE", "simple"),
     "product_list_cache_hours": float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24")),
+    "department_discovery_cache_hours": float(os.environ.get("DEPARTMENT_DISCOVERY_CACHE_HOURS", "24")),
+    "store_discovery_cache_hours": float(os.environ.get("STORE_DISCOVERY_CACHE_HOURS", "24")),
 }
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
 TRIGGER_PORT = int(os.environ.get("TRIGGER_PORT", "8090"))
@@ -357,6 +359,8 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
                     exclude_keywords=settings["exclude_keywords"], keyword_filter_mode=settings["keyword_filter_mode"],
                     store_keyword_filters=store_keyword_filters,
                     product_list_cache_hours=settings["product_list_cache_hours"],
+                    department_discovery_cache_hours=settings["department_discovery_cache_hours"],
+                    store_discovery_cache_hours=settings["store_discovery_cache_hours"],
                     recycle_browser_ctx=recycle_browser_ctx,
                     on_progress=_on_progress_for_retailer,
                     is_cancelled=_cancel_event.is_set,

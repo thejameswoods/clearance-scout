@@ -158,6 +158,32 @@ def test_reset_department_cache_scoped_to_one_retailer(postgres_conn):
     assert db.get_department_products_last_listed_at(postgres_conn, d2) is not None
 
 
+# --- reset_department_discovery_cache --------------------------------------
+
+def test_reset_department_discovery_cache_nulls_all_by_default(postgres_conn):
+    retailer_id = db.upsert_retailer(postgres_conn, "fake_retailer", "Fake Retailer", "https://example.invalid")
+    db.mark_departments_discovered(postgres_conn, retailer_id)
+    assert db.get_departments_last_discovered_at(postgres_conn, retailer_id) is not None
+
+    reset_count = db.reset_department_discovery_cache(postgres_conn)
+
+    assert reset_count == 1
+    assert db.get_departments_last_discovered_at(postgres_conn, retailer_id) is None
+
+
+def test_reset_department_discovery_cache_scoped_to_one_retailer(postgres_conn):
+    r1 = db.upsert_retailer(postgres_conn, "retailer_one", "Retailer One", "https://example.invalid")
+    r2 = db.upsert_retailer(postgres_conn, "retailer_two", "Retailer Two", "https://example.invalid")
+    db.mark_departments_discovered(postgres_conn, r1)
+    db.mark_departments_discovered(postgres_conn, r2)
+
+    reset_count = db.reset_department_discovery_cache(postgres_conn, retailer_slug="retailer_one")
+
+    assert reset_count == 1
+    assert db.get_departments_last_discovered_at(postgres_conn, r1) is None
+    assert db.get_departments_last_discovered_at(postgres_conn, r2) is not None
+
+
 # --- routes ---------------------------------------------------------------
 
 @pytest.fixture()
@@ -204,6 +230,17 @@ def test_reset_department_cache_route(client, postgres_conn):
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "reset": 1}
     assert db.get_department_products_last_listed_at(postgres_conn, dept_id) is None
+
+
+def test_reset_department_discovery_cache_route(client, postgres_conn):
+    retailer_id = db.upsert_retailer(postgres_conn, "fake_retailer", "Fake Retailer", "https://example.invalid")
+    db.mark_departments_discovered(postgres_conn, retailer_id)
+
+    resp = client.post("/api/admin/reset-department-discovery-cache")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "reset": 1}
+    assert db.get_departments_last_discovered_at(postgres_conn, retailer_id) is None
 
 
 def test_repair_missing_data_count_route(client, postgres_conn):

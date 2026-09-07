@@ -45,6 +45,17 @@ def reset_department_cache(retailer: str | None = None):
     return {"ok": True, "reset": count}
 
 
+@router.post("/reset-department-discovery-cache")
+def reset_department_discovery_cache(retailer: str | None = None):
+    # Manual busting for the department-discovery cache (see
+    # scanner/orchestrator.py's run_scan and common/db.py's
+    # reset_department_discovery_cache) -- pure DB nulling, no scanner
+    # container proxy needed, same as reset-department-cache above.
+    with db.get_connection() as conn:
+        count = db.reset_department_discovery_cache(conn, retailer_slug=retailer)
+    return {"ok": True, "reset": count}
+
+
 @router.get("/repair-missing-data/count")
 def count_missing_data():
     with db.get_connection() as conn:

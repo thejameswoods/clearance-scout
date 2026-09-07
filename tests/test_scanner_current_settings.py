@@ -18,6 +18,8 @@ ENV_DEFAULTS = {
     "exclude_keywords": None,
     "keyword_filter_mode": "simple",
     "product_list_cache_hours": 24.0,
+    "department_discovery_cache_hours": 24.0,
+    "store_discovery_cache_hours": 24.0,
 }
 
 

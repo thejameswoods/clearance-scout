@@ -53,11 +53,13 @@ class ConfigurableFakeAdapter(RetailerAdapter):
         self.failing_skus = failing_skus or set()
         self.list_products_call_count = 0
         self.discover_departments_call_count = 0
+        self.find_stores_call_count = 0
 
     def authenticate(self, browser_ctx) -> AuthResult:
         return AuthResult(valid=True)
 
     def find_stores(self, browser_ctx, zip_code: str, radius_miles: float) -> Iterator[StoreInfo]:
+        self.find_stores_call_count += 1
         yield from self.stores
 
     def select_store(self, browser_ctx, store: StoreInfo) -> None:

@@ -56,3 +56,18 @@ def test_rescan_stores_does_not_disturb_an_existing_enabled_flag(postgres_conn):
 
     row = postgres_conn.execute("SELECT enabled FROM store WHERE id = %s", (store_id,)).fetchone()
     assert row["enabled"] is False
+
+
+def test_rescan_stores_marks_store_discovery_cache_fresh(postgres_conn):
+    # This button is the manual busting mechanism for run_scan's
+    # store-discovery cache (see tests/test_store_discovery_cache.py) --
+    # it must also reset the cache timestamp, or a scan run moments later
+    # could still serve a stale in-cache store list.
+    from common import db
+
+    adapter = ConfigurableFakeAdapter(stores=[StoreInfo(retailer_store_id="store-a", zip_code="00000")])
+
+    rescan_stores(postgres_conn, FakeBrowserContext(), adapter, zip_code="00000")
+
+    retailer_id = db.upsert_retailer(postgres_conn, adapter.retailer_slug, adapter.retailer_display_name, "")
+    assert db.get_stores_last_discovered_at(postgres_conn, retailer_id) is not None

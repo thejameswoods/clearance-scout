@@ -113,6 +113,8 @@ def run_scan(
     keyword_filter_mode: str = "simple",
     store_keyword_filters: dict[str, dict] | None = None,
     product_list_cache_hours: float = 24.0,
+    department_discovery_cache_hours: float = 24.0,
+    store_discovery_cache_hours: float = 24.0,
     recycle_browser_ctx: Callable[[object], object] | None = None,
     on_progress: Callable[[dict], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
@@ -134,6 +136,21 @@ def run_scan(
     `store_keyword_filters` (keyed by retailer_store_id) lets one store
     fully replace those three for itself (see _effective_keyword_filter),
     resolved fresh per store since it can differ store to store.
+
+    `department_discovery_cache_hours`/`store_discovery_cache_hours`: same
+    caching idea as `product_list_cache_hours` below, applied to the two
+    other discovery phases that were previously re-run live on every single
+    scan for data that barely changes -- department-tree discovery
+    (confirmed live 2026-09-07: ~27.65s/scan average, a live sitemap crawl
+    of an essentially-static category tree) and store discovery
+    (`find_stores`, another live network round trip for a store list that
+    rarely changes). Both gate on a `retailer`-level last-discovered
+    timestamp (`db.get_departments_last_discovered_at`/
+    `db.get_stores_last_discovered_at`) the same way `product_list_cache_hours`
+    gates on `department.products_last_listed_at` -- see the cache-hit
+    branches below. Busted manually via `POST
+    /api/admin/reset-department-discovery-cache` (departments) or the
+    existing "Rescan store list" button (stores, via `rescan_stores` below).
 
     `store_ids`: which of `find_stores()`'s discovered stores actually get
     price-checked this run, layered on top of a standing exclusion that
@@ -217,7 +234,31 @@ def run_scan(
         raise ScanAbortedNeedsLogin()
     db.set_credential_session_status(conn, retailer_id, "valid")
 
-    stores = list(adapter.find_stores(browser_ctx, zip_code, radius_miles))
+    stores_last_discovered_at = db.get_stores_last_discovered_at(conn, retailer_id)
+    stores_cache_is_fresh = (
+        stores_last_discovered_at is not None
+        and datetime.now(timezone.utc) - stores_last_discovered_at < timedelta(hours=store_discovery_cache_hours)
+    )
+    if stores_cache_is_fresh:
+        # Reconstructed rows ARE the current `store` table content already
+        # (that's the entire premise of reading from DB instead of the
+        # network) -- no re-upsert needed here, unlike the live path below,
+        # which upserts every discovered store to refresh distance/name/
+        # address. Includes every store regardless of `enabled` (same
+        # universe find_stores conceptually returns) -- db.get_disabled_store_ids
+        # is applied further down regardless of where `stores` came from,
+        # so filtering here would only break "every discovered store's row
+        # stays current" for a disabled store, without changing scan scope.
+        stores = [
+            StoreInfo(
+                retailer_store_id=row["retailer_store_id"], zip_code=row["zip_code"],
+                name=row["name"], address=row["address"], distance_miles=row["distance_miles"],
+            )
+            for row in db.list_stores_for_retailer(conn, retailer_id)
+        ]
+    else:
+        stores = list(adapter.find_stores(browser_ctx, zip_code, radius_miles))
+        db.mark_stores_discovered(conn, retailer_id)
     # Progress logging below is deliberately checkpoint-based (store,
     # department, and a periodic heartbeat during price checks), not
     # per-item -- confirmed live 2026-08-31 the orchestrator previously
@@ -234,7 +275,19 @@ def run_scan(
     # multi-page sitemap crawl once per store (14x redundant work for a
     # 14-store scan) for identical results every time.
     scan_run_id = db.start_scan_run(conn, retailer_id, None, "departments", trigger)
-    all_departments = list(adapter.discover_departments(browser_ctx))
+    departments_last_discovered_at = db.get_departments_last_discovered_at(conn, retailer_id)
+    departments_cache_is_fresh = (
+        departments_last_discovered_at is not None
+        and datetime.now(timezone.utc) - departments_last_discovered_at < timedelta(hours=department_discovery_cache_hours)
+    )
+    if departments_cache_is_fresh:
+        all_departments = [
+            Department(retailer_department_id=row["retailer_department_id"], name=row["name"])
+            for row in db.list_departments_for_retailer(conn, retailer_id)
+        ]
+    else:
+        all_departments = list(adapter.discover_departments(browser_ctx))
+        db.mark_departments_discovered(conn, retailer_id)
     departments = _select_departments(all_departments, watched_department_names, department_filter)
     db.finish_scan_run(conn, scan_run_id, "completed", 0, 0)
     logger.info(
@@ -242,12 +295,17 @@ def run_scan(
         len(all_departments), len(departments),
     )
     _progress(phase="departments", departments_total=len(departments))
+    # Upserts every DISCOVERED department, not just the ones matching the
+    # current watch list -- needed so a cache-hit reconstruction above (and
+    # the Settings tab's department-tree browser) can see the full catalog
+    # regardless of what's currently watched, not just whatever happened to
+    # be watched the last time a department was actually scanned.
     department_ids = {
         department.retailer_department_id: db.upsert_department(
             conn, retailer_id, department.retailer_department_id, department.name,
             parent_department_id=None,  # resolved lazily; parent linkage is a nice-to-have, not load-bearing
         )
-        for department in departments
+        for department in all_departments
     }
 
     # Settings-disabled is a standing exclusion, resolved fresh here so an
@@ -419,7 +477,7 @@ def run_scan(
                     )
                     db.upsert_store_product_location(conn, product_id, store_id, observation.aisle, observation.bay)
 
-                    observation_id = db.insert_price_observation(
+                    observation_id, _ = db.record_price_observation(
                         conn, product_id, store_id, scan_run_id, observation.observed_at,
                         observation.price_cents, observation.list_price_cents,
                         observation.is_clearance, observation.is_penny,
@@ -543,6 +601,12 @@ def rescan_stores(conn, browser_ctx, adapter: RetailerAdapter, zip_code: str, ra
             conn, retailer_id, store_info.retailer_store_id, store_info.zip_code,
             store_info.name, store_info.address, store_info.distance_miles,
         )
+    # This is the manual busting mechanism for run_scan's store-discovery
+    # cache (store_discovery_cache_hours) -- without stamping this here, a
+    # scan run moments after a manual rescan could still serve a stale
+    # in-cache store list if the TTL window hadn't lapsed yet, defeating
+    # the point of this button as a busting mechanism.
+    db.mark_stores_discovered(conn, retailer_id)
     logger.info("%s: rescanned store list, %d store(s) within %s miles of %s", adapter.retailer_slug, len(stores), radius_miles, zip_code)
 
     return {"stores_found": len(stores)}
@@ -696,7 +760,7 @@ def refresh_single_product(conn, browser_ctx, adapter: RetailerAdapter, product_
             image_url=observation.image_url, canonical_url=observation.canonical_url,
         )
         db.upsert_store_product_location(conn, product_id, store_row["id"], observation.aisle, observation.bay)
-        observation_id = db.insert_price_observation(
+        observation_id, _ = db.record_price_observation(
             conn, product_id, store_row["id"], None, observation.observed_at,
             observation.price_cents, observation.list_price_cents,
             observation.is_clearance, observation.is_penny,

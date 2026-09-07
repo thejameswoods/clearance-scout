@@ -69,6 +69,18 @@ def test_exclude_keywords_and_mode_round_trip(postgres_conn, retailer_id):
     assert settings["keyword_filter_mode"] == "regex"
 
 
+def test_department_and_store_discovery_cache_hours_round_trip(postgres_conn, retailer_id):
+    db.upsert_scanner_settings(
+        postgres_conn, retailer_id,
+        department_discovery_cache_hours=168.0, store_discovery_cache_hours=72.0,
+    )
+
+    settings = db.get_scanner_settings(postgres_conn, retailer_id)
+
+    assert settings["department_discovery_cache_hours"] == 168.0
+    assert settings["store_discovery_cache_hours"] == 72.0
+
+
 # --- store_keyword_filter (issue #1's store-specific override) --------------
 
 @pytest.fixture
