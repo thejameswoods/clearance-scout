@@ -8,7 +8,7 @@ detection risk.
 
 from __future__ import annotations
 
-from adapters.base import Department, ProductRef
+from adapters.base import Department, ProductRef, StoreInfo
 from scanner.orchestrator import run_scan
 from tests.fakes import ConfigurableFakeAdapter, FakeBrowserContext
 
@@ -81,6 +81,84 @@ def test_no_watch_filters_scans_everything_by_default(postgres_conn):
 
     assert result["departments_scanned"] == 2
     assert result["products_checked"] == 3
+
+
+def test_exclude_keywords_wins_over_a_matching_include(postgres_conn):
+    """Issue #1's own example: Includes "String trimmer", Excludes
+    "Refill" should alert on the trimmer but not on just its refills."""
+    dept = Department(retailer_department_id="dept-1", name="Outdoor")
+    products = {
+        "dept-1": [
+            ProductRef(retailer_product_id="sku-trimmer", name="String Trimmer 20V", department=dept),
+            ProductRef(retailer_product_id="sku-refill", name="String Trimmer Refill Line", department=dept),
+        ],
+    }
+    adapter = ConfigurableFakeAdapter(departments=[dept], products_by_department=products)
+
+    result = run_scan(
+        postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
+        watch_keywords=["string trimmer"], exclude_keywords=["refill"],
+    )
+
+    assert result["products_checked"] == 1
+    row = postgres_conn.execute("SELECT name FROM product").fetchone()
+    assert row["name"] == "String Trimmer 20V"
+
+
+def test_regex_mode_applies_to_both_include_and_exclude(postgres_conn):
+    dept = Department(retailer_department_id="dept-1", name="Electrical")
+    products = {
+        "dept-1": [
+            ProductRef(retailer_product_id="sku-1", name="12-Gauge Wire", department=dept),
+            ProductRef(retailer_product_id="sku-2", name="10-Gauge Wire", department=dept),
+            ProductRef(retailer_product_id="sku-3", name="Duplex Outlet", department=dept),
+        ],
+    }
+    adapter = ConfigurableFakeAdapter(departments=[dept], products_by_department=products)
+
+    result = run_scan(
+        postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
+        watch_keywords=[r"\d+-Gauge"], exclude_keywords=["^12"], keyword_filter_mode="regex",
+    )
+
+    assert result["products_checked"] == 1
+    row = postgres_conn.execute("SELECT name FROM product").fetchone()
+    assert row["name"] == "10-Gauge Wire"
+
+
+def test_store_keyword_filter_replaces_global_for_that_store_only(postgres_conn):
+    """A store-level override fully replaces the retailer-wide filter for
+    that one store -- it doesn't layer with it (see
+    db/init/001_schema.sql's store_keyword_filter docstring) -- and other
+    stores keep using the retailer-wide filter unchanged."""
+    store_a = StoreInfo(retailer_store_id="store-a", zip_code="00000", name="Store A")
+    store_b = StoreInfo(retailer_store_id="store-b", zip_code="00000", name="Store B")
+    dept = Department(retailer_department_id="dept-1", name="Outdoor")
+    products = {
+        "dept-1": [
+            ProductRef(retailer_product_id="sku-trimmer", name="String Trimmer", department=dept),
+            ProductRef(retailer_product_id="sku-mower", name="Push Mower", department=dept),
+        ],
+    }
+    adapter = ConfigurableFakeAdapter(
+        stores=[store_a, store_b], departments=[dept], products_by_department=products,
+    )
+
+    result = run_scan(
+        postgres_conn, FakeBrowserContext(), adapter, zip_code="00000",
+        watch_keywords=["trimmer"],  # global: only trimmers
+        store_keyword_filters={
+            "store-b": {"mode": "simple", "include_keywords": ["mower"], "exclude_keywords": None},
+        },
+    )
+
+    assert result["products_checked"] == 2  # store-a: trimmer only, store-b: mower only
+    rows = postgres_conn.execute(
+        "SELECT s.retailer_store_id, p.name FROM price_observation po "
+        "JOIN store s ON s.id = po.store_id JOIN product p ON p.id = po.product_id"
+    ).fetchall()
+    by_store = {r["retailer_store_id"]: r["name"] for r in rows}
+    assert by_store == {"store-a": "String Trimmer", "store-b": "Push Mower"}
 
 
 def test_department_filter_overrides_watch_list(postgres_conn):

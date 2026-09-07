@@ -36,9 +36,30 @@ def merge_settings(env_defaults: dict[str, Any], override: dict[str, Any] | None
             split_list(override["watch_keywords"]) if "watch_keywords" in override
             else env_defaults["watch_keywords"]
         ),
+        "exclude_keywords": (
+            split_list(override["exclude_keywords"]) if "exclude_keywords" in override
+            else env_defaults["exclude_keywords"]
+        ),
+        "keyword_filter_mode": override.get("keyword_filter_mode", env_defaults["keyword_filter_mode"]),
         "product_list_cache_hours": override.get(
             "product_list_cache_hours", env_defaults["product_list_cache_hours"]
         ),
+    }
+
+
+def parse_store_keyword_filters(rows: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """db.get_store_keyword_filters_for_retailer's raw TEXT rows (keyed by
+    retailer_store_id), each split into a list the same way watch_keywords
+    itself is -- kept here, not in common/db.py, so the text-parsing stays
+    testable without a database (same rationale as split_list/merge_settings
+    above)."""
+    return {
+        store_id: {
+            "mode": row["mode"],
+            "include_keywords": split_list(row["include_keywords"]),
+            "exclude_keywords": split_list(row["exclude_keywords"]),
+        }
+        for store_id, row in rows.items()
     }
 
 

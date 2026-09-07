@@ -9,12 +9,14 @@ module's docstring.
 
 from __future__ import annotations
 
-from scanner.settings import merge_settings, split_list
+from scanner.settings import merge_settings, parse_store_keyword_filters, split_list
 
 ENV_DEFAULTS = {
     "zip_code": "00000",
     "radius_miles": 25.0,
     "watch_keywords": None,
+    "exclude_keywords": None,
+    "keyword_filter_mode": "simple",
     "product_list_cache_hours": 24.0,
 }
 
@@ -68,3 +70,29 @@ def test_split_list_handles_blank_and_whitespace():
     assert split_list("") is None
     assert split_list("  ") is None
     assert split_list("A, B ,  C") == ["A", "B", "C"]
+
+
+def test_exclude_keywords_and_mode_merge_like_watch_keywords():
+    override_row = {"exclude_keywords": "refill, kit", "keyword_filter_mode": "regex"}
+
+    settings = merge_settings(ENV_DEFAULTS, override_row)
+
+    assert settings["exclude_keywords"] == ["refill", "kit"]
+    assert settings["keyword_filter_mode"] == "regex"
+
+
+def test_keyword_filter_mode_falls_back_to_env_default():
+    settings = merge_settings(ENV_DEFAULTS, {"zip_code": "90210"})
+    assert settings["keyword_filter_mode"] == "simple"
+
+
+def test_parse_store_keyword_filters_splits_each_rows_text_fields():
+    rows = {
+        "store-a": {"mode": "simple", "include_keywords": "drill, saw", "exclude_keywords": None},
+        "store-b": {"mode": "regex", "include_keywords": None, "exclude_keywords": "^refill"},
+    }
+
+    parsed = parse_store_keyword_filters(rows)
+
+    assert parsed["store-a"] == {"mode": "simple", "include_keywords": ["drill", "saw"], "exclude_keywords": None}
+    assert parsed["store-b"] == {"mode": "regex", "include_keywords": None, "exclude_keywords": ["^refill"]}

@@ -1942,16 +1942,98 @@ async function renderSettingsMain() {
 
 const CREDENTIAL_STATUS_LABELS = { valid: "Connected", expired: "Session expired", needs_login: "Needs login" };
 
+// Issue #1: per-store keyword-filter override. A store's keyword_filter_*
+// fields (from queries.retailer_store_list) are non-null only once this
+// store has its own saved store_keyword_filter row -- see that table's
+// docstring, it fully replaces (not layers with) the retailer-wide filter
+// for this store, so this panel edits/clears the whole row, not per-field.
 function settingsStoreRowHtml(store) {
   const distance = store.distance_miles != null ? `${store.distance_miles.toFixed(1)} mi` : "distance unknown";
   const scanned = store.last_scanned_at ? `scanned ${relTime(store.last_scanned_at)}` : "never scanned";
+  const hasOverride = store.keyword_filter_include != null || store.keyword_filter_exclude != null;
   return `
-    <label class="settings-store-row">
-      <input type="checkbox" class="settings-store-check" data-store-id="${store.store_id}" ${store.enabled ? "checked" : ""} />
-      <span class="settings-store-name">${escapeHtml(store.name || store.retailer_store_id)}</span>
-      <span class="settings-store-meta">${distance} · ${scanned}</span>
-    </label>
+    <div class="settings-store-row-wrap">
+      <label class="settings-store-row">
+        <input type="checkbox" class="settings-store-check" data-store-id="${store.store_id}" ${store.enabled ? "checked" : ""} />
+        <span class="settings-store-name">${escapeHtml(store.name || store.retailer_store_id)}</span>
+        <span class="settings-store-meta">${distance} · ${scanned}</span>
+        <button type="button" class="settings-store-filter-toggle" data-store-id="${store.store_id}">${hasOverride ? "Custom filter ✓" : "Filters"}</button>
+      </label>
+      <div class="settings-store-filter-panel" id="store-filter-panel-${store.store_id}" hidden>
+        <label>Mode
+          <select class="store-filter-mode" data-store-id="${store.store_id}">
+            <option value="simple" ${store.keyword_filter_mode !== "regex" ? "selected" : ""}>Simple text</option>
+            <option value="regex" ${store.keyword_filter_mode === "regex" ? "selected" : ""}>Regex</option>
+          </select>
+        </label>
+        <label>Includes <input type="text" class="store-filter-include" data-store-id="${store.store_id}" value="${escapeHtml(store.keyword_filter_include || "")}" placeholder="blank = all products"></label>
+        <label>Excludes <input type="text" class="store-filter-exclude" data-store-id="${store.store_id}" value="${escapeHtml(store.keyword_filter_exclude || "")}" placeholder="blank = no exclusions"></label>
+        <p class="meta">Overrides this retailer's keyword filter for this store only -- doesn't combine with it.</p>
+        <div class="modal-actions">
+          <button type="button" class="store-filter-save-btn" data-store-id="${store.store_id}">Save</button>
+          ${hasOverride ? `<button type="button" class="store-filter-clear-btn secondary" data-store-id="${store.store_id}">Use retailer's filter</button>` : ""}
+          <span class="meta store-filter-status" data-store-id="${store.store_id}"></span>
+        </div>
+      </div>
+    </div>
   `;
+}
+
+function setupSettingsStoreFilters() {
+  $$(".settings-store-filter-toggle").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const panel = document.getElementById(`store-filter-panel-${btn.dataset.storeId}`);
+      panel.hidden = !panel.hidden;
+    })
+  );
+  $$(".store-filter-save-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const storeId = btn.dataset.storeId;
+      const wrap = btn.closest(".settings-store-row-wrap");
+      const statusEl = wrap.querySelector(".store-filter-status");
+      statusEl.textContent = "Saving…";
+      try {
+        await api(`/api/settings/stores/${storeId}/keyword-filter`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: wrap.querySelector(".store-filter-mode").value,
+            include_keywords: wrap.querySelector(".store-filter-include").value.trim(),
+            exclude_keywords: wrap.querySelector(".store-filter-exclude").value.trim(),
+          }),
+        });
+        statusEl.textContent = "Saved -- takes effect on the next scan.";
+        wrap.querySelector(".settings-store-filter-toggle").textContent = "Custom filter ✓";
+        if (!wrap.querySelector(".store-filter-clear-btn")) {
+          statusEl.insertAdjacentHTML(
+            "beforebegin",
+            `<button type="button" class="store-filter-clear-btn secondary" data-store-id="${storeId}">Use retailer's filter</button>`
+          );
+          wireStoreFilterClearButton(wrap.querySelector(".store-filter-clear-btn"));
+        }
+      } catch (e) {
+        statusEl.textContent = `Save failed: ${e.message}`;
+      }
+    })
+  );
+  $$(".store-filter-clear-btn").forEach(wireStoreFilterClearButton);
+}
+
+function wireStoreFilterClearButton(btn) {
+  btn.addEventListener("click", async () => {
+    const storeId = btn.dataset.storeId;
+    const wrap = btn.closest(".settings-store-row-wrap");
+    const statusEl = wrap.querySelector(".store-filter-status");
+    statusEl.textContent = "Clearing…";
+    try {
+      await api(`/api/settings/stores/${storeId}/keyword-filter`, { method: "DELETE" });
+      statusEl.textContent = "Using this retailer's filter.";
+      wrap.querySelector(".settings-store-filter-toggle").textContent = "Filters";
+      btn.remove();
+    } catch (e) {
+      statusEl.textContent = `Failed: ${e.message}`;
+    }
+  });
 }
 
 function renderSettingsRetailerPanel(detail) {
@@ -1971,7 +2053,14 @@ function renderSettingsRetailerPanel(detail) {
       <form id="settings-config-form" class="settings-form">
         <label>ZIP code <input type="text" id="cfg-zip" value="${escapeHtml(sc.zip_code || "")}" required></label>
         <label>Radius (miles) <input type="number" id="cfg-radius" min="1" step="0.5" value="${sc.radius_miles ?? ""}" required></label>
-        <label>Watch keywords <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml((sc.watch_keywords || []).join(", "))}"></label>
+        <label>Keyword filter mode
+          <select id="cfg-keyword-mode">
+            <option value="simple" ${sc.keyword_filter_mode !== "regex" ? "selected" : ""}>Simple text</option>
+            <option value="regex" ${sc.keyword_filter_mode === "regex" ? "selected" : ""}>Regex</option>
+          </select>
+        </label>
+        <label>Keyword filter includes <input type="text" id="cfg-keywords" placeholder="blank = all products" value="${escapeHtml((sc.watch_keywords || []).join(", "))}"></label>
+        <label>Keyword filter excludes <input type="text" id="cfg-exclude-keywords" placeholder="blank = no exclusions" value="${escapeHtml((sc.exclude_keywords || []).join(", "))}"></label>
         <label>Product list cache (hours) <input type="number" id="cfg-cache-hours" min="0" step="1" value="${sc.product_list_cache_hours ?? ""}"></label>
         <label>Minimum discount % <input type="number" id="cfg-min-discount" min="0" max="100" step="1" value="${detail.min_discount_pct ?? ""}" placeholder="no floor"></label>
         <div class="modal-actions">
@@ -2019,6 +2108,7 @@ function renderSettingsRetailerPanel(detail) {
 
   setupSettingsConfigForm(detail);
   setupSettingsStoreChecks();
+  setupSettingsStoreFilters();
   setupSettingsRescanStores(detail);
   setupSettingsDeptTree(detail);
   setupSettingsDangerZone(detail);
@@ -2048,6 +2138,8 @@ function setupSettingsConfigForm(detail) {
           zip_code: $("#cfg-zip").value.trim(),
           radius_miles: Number($("#cfg-radius").value),
           watch_keywords: $("#cfg-keywords").value.trim(),
+          exclude_keywords: $("#cfg-exclude-keywords").value.trim(),
+          keyword_filter_mode: $("#cfg-keyword-mode").value,
           product_list_cache_hours: Number($("#cfg-cache-hours").value),
         }),
       });

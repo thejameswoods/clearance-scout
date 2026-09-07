@@ -7,6 +7,7 @@ test_multi_store.py) run through to prove the abstraction actually holds.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -39,11 +40,47 @@ class ScanCancelled(Exception):
         self.open_scan_run_id = open_scan_run_id
 
 
-def _matches_any(name: str, substrings: list[str] | None) -> bool:
-    if not substrings:
-        return True
+def _keyword_matches(name: str, keywords: list[str], mode: str) -> bool:
+    if mode == "regex":
+        return any(re.search(pattern, name, re.IGNORECASE) for pattern in keywords)
     lowered = name.lower()
-    return any(s.lower() in lowered for s in substrings)
+    return any(kw.lower() in lowered for kw in keywords)
+
+
+def _passes_keyword_filter(
+    name: str, include_keywords: list[str] | None, exclude_keywords: list[str] | None, mode: str = "simple",
+) -> bool:
+    """include_keywords: None/empty means no include restriction (matches
+    everything, the original watch_keywords default); non-empty requires at
+    least one match. exclude_keywords is checked *after* -- and always
+    wins -- so e.g. Includes: "String trimmer", Excludes: "Refill" (issue
+    #1's own example) alerts on a string trimmer without alerting on just
+    its refills. `mode` ('simple' plain-substring or 'regex') applies to
+    both lists the same way -- see db/init/001_schema.sql's
+    keyword_filter_mode."""
+    if include_keywords and not _keyword_matches(name, include_keywords, mode):
+        return False
+    if exclude_keywords and _keyword_matches(name, exclude_keywords, mode):
+        return False
+    return True
+
+
+def _effective_keyword_filter(
+    retailer_store_id: str,
+    watch_keywords: list[str] | None,
+    exclude_keywords: list[str] | None,
+    keyword_filter_mode: str,
+    store_keyword_filters: dict[str, dict] | None,
+) -> tuple[list[str] | None, list[str] | None, str]:
+    """A store-level override (store_keyword_filters, keyed by
+    retailer_store_id -- see db.get_store_keyword_filters_for_retailer)
+    fully replaces the retailer-wide include/exclude/mode for that one
+    store rather than layering with it -- see
+    db/init/001_schema.sql's store_keyword_filter docstring for why."""
+    override = (store_keyword_filters or {}).get(retailer_store_id)
+    if override is None:
+        return watch_keywords, exclude_keywords, keyword_filter_mode
+    return override.get("include_keywords"), override.get("exclude_keywords"), override.get("mode", "simple")
 
 
 def _select_departments(
@@ -72,6 +109,9 @@ def run_scan(
     store_ids: list[str] | None = None,
     watched_department_names: set[str] | None = None,
     watch_keywords: list[str] | None = None,
+    exclude_keywords: list[str] | None = None,
+    keyword_filter_mode: str = "simple",
+    store_keyword_filters: dict[str, dict] | None = None,
     product_list_cache_hours: float = 24.0,
     recycle_browser_ctx: Callable[[object], object] | None = None,
     on_progress: Callable[[dict], None] | None = None,
@@ -88,9 +128,12 @@ def run_scan(
     department (see common/db.py's get_watched_department_names, the
     caller that normally produces this set); `None` means nothing's
     explicitly watched, i.e. scan every department (the original,
-    unfiltered default). `watch_keywords` is a separate, still
-    substring-based narrowing by product name within whatever departments
-    that leaves.
+    unfiltered default). `watch_keywords`/`exclude_keywords`/
+    `keyword_filter_mode` are a separate narrowing by product name within
+    whatever departments that leaves (see _passes_keyword_filter) --
+    `store_keyword_filters` (keyed by retailer_store_id) lets one store
+    fully replace those three for itself (see _effective_keyword_filter),
+    resolved fresh per store since it can differ store to store.
 
     `store_ids`: which of `find_stores()`'s discovered stores actually get
     price-checked this run, layered on top of a standing exclusion that
@@ -233,6 +276,23 @@ def run_scan(
     # real-observed-rate ETA on remaining departments/stores, not a guess.
     dept_size_sum = 0
     dept_size_count = 0
+    # Per-scan, in-memory, unfiltered product-ref cache keyed by
+    # department_id -- separate from the DB-level product-list cache
+    # (product_list_cache_hours), which only ever holds what's actually
+    # been price-checked (upsert_product runs on product_refs, the
+    # already keyword-filtered list, not the full listing -- see
+    # list_cached_products_for_department). Without this, two stores
+    # with different keyword filters sharing one department within the
+    # same run would fight over that DB cache: whichever store's filter
+    # ran first for a department determines what got upserted into
+    # `product`, so the next store to hit that same (now "fresh")
+    # department only ever sees products the FIRST store's filter didn't
+    # already exclude -- confirmed by test_store_keyword_filter_replaces_
+    # global_for_that_store_only failing without this. This dict holds the
+    # one real listing obtained per department this run (via the DB cache
+    # or a fresh site listing, same as before) so every store applies its
+    # own filter to the same true, complete list.
+    department_product_refs: dict[int, list[ProductRef]] = {}
 
     try:
         for store_info in stores:
@@ -254,6 +314,10 @@ def run_scan(
             browser_ctx.clearance_scout_store_id = store_info.retailer_store_id
             stores_scanned += 1
             store_departments_scanned = 0
+            store_include_keywords, store_exclude_keywords, store_keyword_mode = _effective_keyword_filter(
+                store_info.retailer_store_id, watch_keywords, exclude_keywords, keyword_filter_mode,
+                store_keyword_filters,
+            )
             logger.info("Store %s (%s): scanning", store_info.name or store_info.retailer_store_id, store_info.retailer_store_id)
             _progress(
                 phase="store", store=store_info.name or store_info.retailer_store_id,
@@ -268,35 +332,43 @@ def run_scan(
                 departments_scanned += 1
                 store_departments_scanned += 1
 
-                last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
-                cache_is_fresh = (
-                    last_listed_at is not None
-                    and datetime.now(timezone.utc) - last_listed_at < timedelta(hours=product_list_cache_hours)
-                )
-
                 scan_run_id = db.start_scan_run(conn, retailer_id, store_id, "products", trigger)
-                if cache_is_fresh:
-                    all_product_refs = [
-                        ProductRef(
-                            retailer_product_id=row["retailer_product_id"], name=row["name"],
-                            department=department, upc=row["upc"], image_url=row["image_url"],
-                        )
-                        for row in db.list_cached_products_for_department(conn, department_id)
-                    ]
+                if department_id in department_product_refs:
+                    all_product_refs = department_product_refs[department_id]
+                    listing_source = "from this scan's earlier listing"
                 else:
-                    try:
-                        all_product_refs = list(adapter.list_products(browser_ctx, department))
-                    except Exception:
-                        logger.exception("Failed listing products for department %s", department.name)
-                        db.finish_scan_run(conn, scan_run_id, "failed", 0, 1)
-                        continue
-                    db.mark_department_products_listed(conn, department_id)
-                product_refs = [p for p in all_product_refs if _matches_any(p.name, watch_keywords)]
+                    last_listed_at = db.get_department_products_last_listed_at(conn, department_id)
+                    cache_is_fresh = (
+                        last_listed_at is not None
+                        and datetime.now(timezone.utc) - last_listed_at < timedelta(hours=product_list_cache_hours)
+                    )
+                    if cache_is_fresh:
+                        all_product_refs = [
+                            ProductRef(
+                                retailer_product_id=row["retailer_product_id"], name=row["name"],
+                                department=department, upc=row["upc"], image_url=row["image_url"],
+                            )
+                            for row in db.list_cached_products_for_department(conn, department_id)
+                        ]
+                        listing_source = "from cache"
+                    else:
+                        try:
+                            all_product_refs = list(adapter.list_products(browser_ctx, department))
+                        except Exception:
+                            logger.exception("Failed listing products for department %s", department.name)
+                            db.finish_scan_run(conn, scan_run_id, "failed", 0, 1)
+                            continue
+                        db.mark_department_products_listed(conn, department_id)
+                        listing_source = "freshly listed"
+                    department_product_refs[department_id] = all_product_refs
+                product_refs = [
+                    p for p in all_product_refs
+                    if _passes_keyword_filter(p.name, store_include_keywords, store_exclude_keywords, store_keyword_mode)
+                ]
                 db.finish_scan_run(conn, scan_run_id, "completed", len(product_refs), 0)
                 logger.info(
                     "Department %r: %d product(s) to check (%s)",
-                    department.name, len(product_refs),
-                    "from cache" if cache_is_fresh else "freshly listed",
+                    department.name, len(product_refs), listing_source,
                 )
                 dept_size_sum += len(product_refs)
                 dept_size_count += 1

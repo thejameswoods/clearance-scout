@@ -226,8 +226,31 @@ CREATE TABLE scanner_settings (
     zip_code                 TEXT,
     radius_miles             DOUBLE PRECISION,
     watch_keywords           TEXT,
+    -- exclude_keywords/keyword_filter_mode extend watch_keywords (issue #1):
+    -- watch_keywords is the include list, exclude_keywords is checked after
+    -- (and always wins -- see scanner/orchestrator.py's
+    -- _passes_keyword_filter), and keyword_filter_mode switches both from
+    -- plain substring matching to regex. Same comma-separated TEXT format
+    -- and override-or-env-default semantics as watch_keywords.
+    exclude_keywords         TEXT,
+    keyword_filter_mode      TEXT NOT NULL DEFAULT 'simple'
+                              CHECK (keyword_filter_mode IN ('simple', 'regex')),
     product_list_cache_hours DOUBLE PRECISION,
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Per-store keyword-filter override (issue #1's "store specific" level).
+-- A row here fully replaces (not layers with) the retailer-wide
+-- scanner_settings filter for that one store -- see
+-- scanner/orchestrator.py's _effective_keyword_filter. No row means "use
+-- the retailer-wide filter", same as scanner_settings itself having no row
+-- meaning "use the env-var default".
+CREATE TABLE store_keyword_filter (
+    store_id          INTEGER PRIMARY KEY REFERENCES store(id) ON DELETE CASCADE,
+    mode              TEXT NOT NULL DEFAULT 'simple' CHECK (mode IN ('simple', 'regex')),
+    include_keywords  TEXT,
+    exclude_keywords  TEXT,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Explicit departments-to-watch selection (Settings checkbox tree). A row

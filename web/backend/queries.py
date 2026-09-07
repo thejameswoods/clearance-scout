@@ -543,13 +543,19 @@ def retailer_detail(conn, retailer_id: int) -> dict[str, Any] | None:
 def retailer_store_list(conn, retailer_id: int) -> list[dict[str, Any]]:
     """Settings panel's "Location & stores" list -- unlike scan_scope
     (Scan Now dialog), includes disabled stores too, since this is where
-    an admin re-enables one."""
+    an admin re-enables one. keyword_filter is this store's saved
+    override (see store_keyword_filter), or None if it just uses the
+    retailer-wide filter -- lets the Settings UI show which stores have
+    a custom filter without a second request per store."""
     return conn.execute(
         """
         SELECT s.id AS store_id, s.name, s.retailer_store_id, s.distance_miles, s.enabled,
                (SELECT max(sr.finished_at) FROM scan_run sr
-                WHERE sr.store_id = s.id AND sr.status = 'completed') AS last_scanned_at
+                WHERE sr.store_id = s.id AND sr.status = 'completed') AS last_scanned_at,
+               skf.mode AS keyword_filter_mode, skf.include_keywords AS keyword_filter_include,
+               skf.exclude_keywords AS keyword_filter_exclude
         FROM store s
+        LEFT JOIN store_keyword_filter skf ON skf.store_id = s.id
         WHERE s.retailer_id = %s
         ORDER BY s.distance_miles NULLS LAST, s.name
         """,

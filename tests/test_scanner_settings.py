@@ -56,3 +56,61 @@ def test_unknown_field_rejected(postgres_conn, retailer_id):
 def test_empty_upsert_is_a_noop(postgres_conn, retailer_id):
     db.upsert_scanner_settings(postgres_conn, retailer_id)  # should not raise
     assert db.get_scanner_settings(postgres_conn, retailer_id) is None
+
+
+def test_exclude_keywords_and_mode_round_trip(postgres_conn, retailer_id):
+    db.upsert_scanner_settings(
+        postgres_conn, retailer_id, exclude_keywords="refill, kit", keyword_filter_mode="regex",
+    )
+
+    settings = db.get_scanner_settings(postgres_conn, retailer_id)
+
+    assert settings["exclude_keywords"] == "refill, kit"
+    assert settings["keyword_filter_mode"] == "regex"
+
+
+# --- store_keyword_filter (issue #1's store-specific override) --------------
+
+@pytest.fixture
+def store_id(postgres_conn, retailer_id):
+    return db.upsert_store(postgres_conn, retailer_id, "store-1", "00000", "Store 1", None)
+
+
+def test_no_store_filter_saved_yet_returns_none(postgres_conn, store_id):
+    assert db.get_store_keyword_filter(postgres_conn, store_id) is None
+
+
+def test_set_then_get_store_filter_round_trips(postgres_conn, store_id):
+    db.set_store_keyword_filter(
+        postgres_conn, store_id, mode="regex", include_keywords="drill", exclude_keywords="cordless",
+    )
+
+    filt = db.get_store_keyword_filter(postgres_conn, store_id)
+
+    assert filt == {"mode": "regex", "include_keywords": "drill", "exclude_keywords": "cordless"}
+
+
+def test_set_store_filter_twice_upserts_not_duplicates(postgres_conn, store_id):
+    db.set_store_keyword_filter(postgres_conn, store_id, mode="simple", include_keywords="drill", exclude_keywords=None)
+    db.set_store_keyword_filter(postgres_conn, store_id, mode="simple", include_keywords="saw", exclude_keywords=None)
+
+    filt = db.get_store_keyword_filter(postgres_conn, store_id)
+    assert filt["include_keywords"] == "saw"
+
+
+def test_clear_store_filter_removes_the_row(postgres_conn, store_id):
+    db.set_store_keyword_filter(postgres_conn, store_id, mode="simple", include_keywords="drill", exclude_keywords=None)
+    db.clear_store_keyword_filter(postgres_conn, store_id)
+
+    assert db.get_store_keyword_filter(postgres_conn, store_id) is None
+
+
+def test_get_store_keyword_filters_for_retailer_keys_by_retailer_store_id(postgres_conn, retailer_id, store_id):
+    db.upsert_store(postgres_conn, retailer_id, "store-2", "00000", "Store 2", None)
+    db.set_store_keyword_filter(postgres_conn, store_id, mode="simple", include_keywords="drill", exclude_keywords=None)
+    # store-2 has no override -- should not appear in the result at all.
+
+    filters = db.get_store_keyword_filters_for_retailer(postgres_conn, retailer_id)
+
+    assert set(filters) == {"store-1"}
+    assert filters["store-1"]["include_keywords"] == "drill"

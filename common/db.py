@@ -642,7 +642,8 @@ def set_credential_session_status(conn, retailer_id: int, status: str, session_l
 # here -- see get_watched_department_names/set_watched_departments below.
 
 SCANNER_SETTINGS_FIELDS = (
-    "zip_code", "radius_miles", "watch_keywords", "product_list_cache_hours",
+    "zip_code", "radius_miles", "watch_keywords", "exclude_keywords", "keyword_filter_mode",
+    "product_list_cache_hours",
 )
 
 
@@ -702,6 +703,61 @@ def get_disabled_store_ids(conn, retailer_id: int) -> set[str]:
         (retailer_id,),
     ).fetchall()
     return {r["retailer_store_id"] for r in rows}
+
+
+# --- per-store keyword-filter override (issue #1) ----------------------------
+# See db/init/001_schema.sql's store_keyword_filter docstring: a row here
+# fully replaces the retailer-wide scanner_settings filter for that store,
+# it doesn't layer with it.
+
+def get_store_keyword_filter(conn, store_id: int) -> dict[str, Any] | None:
+    return conn.execute(
+        "SELECT mode, include_keywords, exclude_keywords FROM store_keyword_filter WHERE store_id = %s",
+        (store_id,),
+    ).fetchone()
+
+
+def set_store_keyword_filter(
+    conn, store_id: int, *, mode: str, include_keywords: str | None, exclude_keywords: str | None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO store_keyword_filter (store_id, mode, include_keywords, exclude_keywords, updated_at)
+        VALUES (%s, %s, %s, %s, now())
+        ON CONFLICT (store_id) DO UPDATE SET
+            mode = EXCLUDED.mode, include_keywords = EXCLUDED.include_keywords,
+            exclude_keywords = EXCLUDED.exclude_keywords, updated_at = now()
+        """,
+        (store_id, mode, include_keywords, exclude_keywords),
+    )
+
+
+def clear_store_keyword_filter(conn, store_id: int) -> None:
+    """Removes the override row entirely -- back to "use the retailer-wide
+    filter", not "use an empty/unrestricted filter" (those aren't the same
+    thing once the retailer-wide filter itself has any keywords set)."""
+    conn.execute("DELETE FROM store_keyword_filter WHERE store_id = %s", (store_id,))
+
+
+def get_store_keyword_filters_for_retailer(conn, retailer_id: int) -> dict[str, dict[str, Any]]:
+    """Every store-level keyword-filter override currently saved for this
+    retailer, keyed by retailer_store_id (the adapter-native id, stable
+    across re-scans) rather than the DB store.id -- resolved fresh at scan
+    start (scanner/main.py), same pattern as get_disabled_store_ids, so a
+    saved override applies on the very next scan with no redeploy. Rows are
+    still the raw TEXT columns; scanner/settings.py's
+    parse_store_keyword_filters splits them into lists, mirroring how
+    watch_keywords itself is parsed."""
+    rows = conn.execute(
+        """
+        SELECT s.retailer_store_id, skf.mode, skf.include_keywords, skf.exclude_keywords
+        FROM store_keyword_filter skf
+        JOIN store s ON s.id = skf.store_id
+        WHERE s.retailer_id = %s
+        """,
+        (retailer_id,),
+    ).fetchall()
+    return {r["retailer_store_id"]: r for r in rows}
 
 
 def get_watched_department_names(conn, retailer_id: int) -> set[str] | None:

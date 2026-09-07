@@ -55,15 +55,18 @@ class RetailerConfigUpdate(BaseModel):
     it" (the existing saved value, or the env-var default if nothing's
     been saved yet, stays in effect) -- see common/db.py's
     upsert_scanner_settings and scanner/settings.py's merge_settings.
-    watch_keywords is the same comma-separated text format as the .env
-    var it overrides; an empty string (not None) explicitly clears it
-    back to "no filter", same as leaving it blank in .env. `enabled` is a
-    separate write (retailer.enabled), applied independently of whatever
-    else is in this request.
+    watch_keywords/exclude_keywords are the same comma-separated text
+    format as the .env vars they override; an empty string (not None)
+    explicitly clears either back to "no filter", same as leaving it
+    blank in .env. keyword_filter_mode is 'simple' or 'regex', applied to
+    both lists. `enabled` is a separate write (retailer.enabled), applied
+    independently of whatever else is in this request.
     """
     zip_code: str | None = None
     radius_miles: float | None = None
     watch_keywords: str | None = None
+    exclude_keywords: str | None = None
+    keyword_filter_mode: str | None = None
     product_list_cache_hours: float | None = None
     enabled: bool | None = None
 
@@ -77,6 +80,8 @@ def update_retailer_config(retailer_id: int, update: RetailerConfigUpdate):
         # (find_stores() needs a real one) -- reject rather than silently
         # stripping the scanner of its store-search anchor.
         raise HTTPException(status_code=400, detail="zip_code can't be blank")
+    if fields.get("keyword_filter_mode") not in (None, "simple", "regex"):
+        raise HTTPException(status_code=400, detail="keyword_filter_mode must be simple or regex")
 
     with db.get_connection() as conn:
         if fields:
@@ -107,6 +112,36 @@ class StoreEnabledUpdate(BaseModel):
 def update_store_enabled(store_id: int, update: StoreEnabledUpdate):
     with db.get_connection() as conn:
         db.set_store_enabled(conn, store_id, update.enabled)
+    return {"ok": True}
+
+
+class StoreKeywordFilterUpdate(BaseModel):
+    mode: str = "simple"
+    include_keywords: str | None = None
+    exclude_keywords: str | None = None
+
+
+@router.put("/stores/{store_id}/keyword-filter")
+def update_store_keyword_filter(store_id: int, update: StoreKeywordFilterUpdate):
+    # Saving this row (even with both lists blank) is itself the "this
+    # store has its own filter" signal -- see store_keyword_filter's
+    # docstring, a row fully replaces the retailer-wide filter for this
+    # store rather than layering with it. Use DELETE to go back to "use
+    # the retailer-wide filter" instead of saving blank fields here.
+    if update.mode not in ("simple", "regex"):
+        raise HTTPException(status_code=400, detail="mode must be simple or regex")
+    with db.get_connection() as conn:
+        db.set_store_keyword_filter(
+            conn, store_id, mode=update.mode,
+            include_keywords=update.include_keywords, exclude_keywords=update.exclude_keywords,
+        )
+    return {"ok": True}
+
+
+@router.delete("/stores/{store_id}/keyword-filter")
+def clear_store_keyword_filter(store_id: int):
+    with db.get_connection() as conn:
+        db.clear_store_keyword_filter(conn, store_id)
     return {"ok": True}
 
 

@@ -28,7 +28,7 @@ from scanner.orchestrator import (
     run_scan,
 )
 from scanner.settings import eta_seconds as _compute_eta_seconds
-from scanner.settings import merge_settings, split_list
+from scanner.settings import merge_settings, parse_store_keyword_filters, split_list
 from scanner.settings import progress_fraction as _compute_progress_fraction
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -55,6 +55,8 @@ ENV_DEFAULTS = {
     "zip_code": os.environ["ZIP_CODE"],
     "radius_miles": float(os.environ.get("RADIUS_MILES", "25")),
     "watch_keywords": split_list(os.environ.get("WATCH_KEYWORDS")),
+    "exclude_keywords": split_list(os.environ.get("EXCLUDE_KEYWORDS")),
+    "keyword_filter_mode": os.environ.get("KEYWORD_FILTER_MODE", "simple"),
     "product_list_cache_hours": float(os.environ.get("PRODUCT_LIST_CACHE_HOURS", "24")),
 }
 PROFILE_DIR = os.environ.get("PLAYWRIGHT_PROFILE_DIR", "/data/browser-profile")
@@ -330,6 +332,10 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
                     db.get_watched_department_names(conn, retailer_row["id"])
                     if retailer_row is not None else None
                 )
+                store_keyword_filters = (
+                    parse_store_keyword_filters(db.get_store_keyword_filters_for_retailer(conn, retailer_row["id"]))
+                    if retailer_row is not None else {}
+                )
                 # Threaded into every progress event below so the header's
                 # phase breadcrumb ("Home Depot > Cary #3608 > Lumber /
                 # Dimensional", wireframe 5b) has a retailer name to lead
@@ -348,6 +354,8 @@ def _scan_all(browser_ctx, trigger: str, department_filter: str | None, recycle_
                     conn, browser_ctx, adapter, settings["zip_code"], radius_miles=settings["radius_miles"],
                     trigger=trigger, department_filter=department_filter, store_ids=store_ids,
                     watched_department_names=watched_department_names, watch_keywords=settings["watch_keywords"],
+                    exclude_keywords=settings["exclude_keywords"], keyword_filter_mode=settings["keyword_filter_mode"],
+                    store_keyword_filters=store_keyword_filters,
                     product_list_cache_hours=settings["product_list_cache_hours"],
                     recycle_browser_ctx=recycle_browser_ctx,
                     on_progress=_on_progress_for_retailer,

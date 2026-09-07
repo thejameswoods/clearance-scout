@@ -74,6 +74,23 @@ def test_put_retailer_config_rejects_blank_zip(client, retailer_id):
     assert resp.status_code == 400
 
 
+def test_put_retailer_config_persists_exclude_keywords_and_mode(client, postgres_conn, retailer_id):
+    resp = client.put(
+        f"/api/settings/retailers/{retailer_id}",
+        json={"exclude_keywords": "refill, kit", "keyword_filter_mode": "regex"},
+    )
+
+    assert resp.status_code == 200
+    settings = db.get_scanner_settings(postgres_conn, retailer_id)
+    assert settings["exclude_keywords"] == "refill, kit"
+    assert settings["keyword_filter_mode"] == "regex"
+
+
+def test_put_retailer_config_rejects_bad_keyword_filter_mode(client, retailer_id):
+    resp = client.put(f"/api/settings/retailers/{retailer_id}", json={"keyword_filter_mode": "fuzzy"})
+    assert resp.status_code == 400
+
+
 def test_put_retailer_config_omitted_fields_do_not_touch_existing_values(client, postgres_conn, retailer_id):
     client.put(f"/api/settings/retailers/{retailer_id}", json={"zip_code": "84105", "radius_miles": 10.0})
     client.put(f"/api/settings/retailers/{retailer_id}", json={"radius_miles": 5.0})
@@ -116,6 +133,48 @@ def test_put_store_enabled_toggle(client, postgres_conn, retailer_id):
 
     assert resp.status_code == 200
     assert db.get_disabled_store_ids(postgres_conn, retailer_id) == {"3612"}
+
+
+def test_put_store_keyword_filter_persists(client, postgres_conn, retailer_id):
+    store_id = db.upsert_store(postgres_conn, retailer_id, "3612", "27514", "Chapel Hill #3612", None)
+
+    resp = client.put(
+        f"/api/settings/stores/{store_id}/keyword-filter",
+        json={"mode": "regex", "include_keywords": "drill", "exclude_keywords": "cordless"},
+    )
+
+    assert resp.status_code == 200
+    filt = db.get_store_keyword_filter(postgres_conn, store_id)
+    assert filt == {"mode": "regex", "include_keywords": "drill", "exclude_keywords": "cordless"}
+
+
+def test_put_store_keyword_filter_rejects_bad_mode(client, postgres_conn, retailer_id):
+    store_id = db.upsert_store(postgres_conn, retailer_id, "3612", "27514", "Chapel Hill #3612", None)
+    resp = client.put(f"/api/settings/stores/{store_id}/keyword-filter", json={"mode": "fuzzy"})
+    assert resp.status_code == 400
+
+
+def test_delete_store_keyword_filter_clears_override(client, postgres_conn, retailer_id):
+    store_id = db.upsert_store(postgres_conn, retailer_id, "3612", "27514", "Chapel Hill #3612", None)
+    db.set_store_keyword_filter(postgres_conn, store_id, mode="simple", include_keywords="drill", exclude_keywords=None)
+
+    resp = client.delete(f"/api/settings/stores/{store_id}/keyword-filter")
+
+    assert resp.status_code == 200
+    assert db.get_store_keyword_filter(postgres_conn, store_id) is None
+
+
+def test_retailer_detail_stores_include_keyword_filter_override(client, postgres_conn, retailer_id):
+    store_id = db.upsert_store(postgres_conn, retailer_id, "3612", "27514", "Chapel Hill #3612", None)
+    db.set_store_keyword_filter(postgres_conn, store_id, mode="simple", include_keywords="drill", exclude_keywords=None)
+
+    resp = client.get(f"/api/settings/retailers/{retailer_id}")
+
+    assert resp.status_code == 200
+    store = resp.json()["stores"][0]
+    assert store["keyword_filter_mode"] == "simple"
+    assert store["keyword_filter_include"] == "drill"
+    assert store["keyword_filter_exclude"] is None
 
 
 def test_rescan_stores_404s_for_unknown_retailer(client):
